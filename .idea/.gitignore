@@ -1,3 +1,35 @@
 # Default ignored files
 /shelf/
 /workspace.xml
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+
+# venv / virtualenv
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Flask / instance
+instance/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Byte-compiled / optimized / DLL files
+*.egg-info/
+dist/
+build/
+
+# Database
+*.sqlite3
+*.db
