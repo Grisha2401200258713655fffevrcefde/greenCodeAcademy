@@ -4,8 +4,8 @@ from flask import Flask, render_template, request, redirect, url_for  # подк
 from flask_sqlalchemy import SQLAlchemy  # подключаем библиотеку для работы с PostgreSQL
 from flask import send_file
 import io
-
-
+from sqlalchemy import or_
+from sqlalchemy.testing.util import total_size
 
 app = Flask(__name__)  # Создаём приложение Flask
 
@@ -175,7 +175,29 @@ def materials_by_language(language):
 def search():
     q = request.args.get('q','').strip()
     if not q:
-        
+        return render_template('poisc.html',
+                               q=q,
+                               materials=[],
+                               total=0,
+                               message='Введите запрос в поле поиска')
+
+    term = f"%{q}%"
+    results = (Material.query
+                .filter(or_(
+                    Material.title.ilike(term),
+                    Material.file_name.ilike(term),
+                    Material.Language.ilike(term),
+                    Material.type.ilike(term)
+                ))
+               .all())
+
+    return render_template('poisc.html',
+                           q=q,
+                           materials=results,
+                           total=len(results),
+                           message=None)
+
+
 
 
 
