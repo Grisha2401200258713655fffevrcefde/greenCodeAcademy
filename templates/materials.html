@@ -1,0 +1,15 @@
+{% extends 'base.html'%}
+{% block title %}все учебные материалы{% endblock%}
+{% block content %}
+    <h1 class="mb-4 text-warning">Все учебные материалы</h1>
+    <ul class="list-group">
+        {% for material in materials %}
+            <li class="list-group-item bg-dark">
+                <a href='/material/{{ material.id }}'><b>{{ material.title }}</b></a>
+                <a href="/material/{{ material.id }}/download" class="btn btn-sm btn-outline-success">Скачать</a>
+            </li>
+        {% else %}
+            <li class="list-group-item bg-dark">Пока материалов нет</li>
+        {% endfor %}
+    </ul>
+{% endblock %}

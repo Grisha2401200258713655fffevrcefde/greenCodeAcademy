@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Главная{% endblock %}
+{% block content %}
+
+
+
+<div class="container my-5">
+    <div class="row g-4">
+        <div class="col-md-4">
+            <div class="card bg-dark text-light shadow h-100">
+                <img src="{{ url_for('static', filename='images/python.png') }}" class="card-img-top" alt="" style="max-height:400px; object-fit:cover;">
+                <div class="card-body">
+                    <h5 class="card-title text-warning">Python</h5>
+                    <p class="card-text"></p>
+                    <a href="/materials/python" class="btn btn-outline-warning btn-sm">View more</a>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card bg-dark text-light shadow h-100">
+                <img src="{{ url_for('static', filename='images/JS.png') }}" class="card-img-top" alt="" style="max-height:400px; object-fit:cover;">
+                <div class="card-body">
+                    <h5 class="card-title text-warning">JS</h5>
+                    <p class="card-text"></p>
+                    <a href="/materials/js" class="btn btn-outline-warning btn-sm">View more</a>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card bg-dark text-light shadow h-100">
+                <img src="{{ url_for('static', filename='images/CSS.png') }}" class="card-img-top" alt="Практика" style="max-height:400px; object-fit:cover;">
+                <div class="card-body">
+                    <h5 class="card-title text-warning">CSS</h5>
+                    <p class="card-text"></p>
+                    <a href="/materials/css" class="btn btn-outline-warning btn-sm">View more</a>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card bg-dark text-light shadow h-100">
+                <img src="{{ url_for('static', filename='images/Rust.png') }}" class="card-img-top" alt="Практика" style="max-height:400px; object-fit:cover;">
+                <div class="card-body">
+                    <h5 class="card-title text-warning">rust</h5>
+                    <p class="card-text"></p>
+                    <a href="/materials" class="btn btn-outline-warning btn-sm">View more</a>
+                </div>
+            </div>
+        </div>
+                <div class="col-md-4">
+            <div class="card bg-dark text-light shadow h-100">
+                <img src="{{ url_for('static', filename='images/Go.png') }}" class="card-img-top" alt="Практика" style="max-height:400px; object-fit:cover;">
+                <div class="card-body">
+                    <h5 class="card-title text-warning">go</h5>
+                    <p class="card-text"></p>
+                    <a href="/materials/css" class="btn btn-outline-warning btn-sm">View more</a>
+                </div>
+            </div>
+        </div>
+                <div class="col-md-4">
+            <div class="card bg-dark text-light shadow h-100">
+                <img src="{{ url_for('static', filename='images/C++.png') }}" class="card-img-top" alt="Практика" style="max-height:400px; object-fit:cover;">
+                <div class="card-body">
+                    <h5 class="card-title text-warning">c++</h5>
+                    <p class="card-text"></p>
+                    <a href="/materials/css" class="btn btn-outline-warning btn-sm">View more</a>
+                </div>
+            </div>
+        </div>
+                <div class="col-md-4">
+            <div class="card bg-dark text-light shadow h-100">
+                <img src="{{ url_for('static', filename='images/Java.png') }}" class="card-img-top" alt="Практика" style="max-height:400px; object-fit:cover;">
+                <div class="card-body">
+                    <h5 class="card-title text-warning">java</h5>
+                    <p class="card-text"></p>
+                    <a href="/materials/css" class="btn btn-outline-warning btn-sm">View more</a>
+                </div>
+            </div>
+        </div>
+                <div class="col-md-4">
+            <div class="card bg-dark text-light shadow h-100">
+                <img src="{{ url_for('static', filename='images/Node.js.png') }}" class="card-img-top" alt="Практика" style="max-height:400px; object-fit:cover;">
+                <div class="card-body">
+                    <h5 class="card-title text-warning">Node js</h5>
+                    <p class="card-text"></p>
+                    <a href="/materials/css" class="btn btn-outline-warning btn-sm">View more</a>
+                </div>
+            </div>
+        </div>
+
+
+
+    </div>
+</div>
+
+{% endblock %}

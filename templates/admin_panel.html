@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Админ-панель — учебный портал</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-success">
+        <div class="container-fluid">
+            <a class="navbar-brand fw-bold" href="#">учебный портал</a>
+        </div>
+    </nav>
+    <div class="container-fluid">
+        <div class="row">
+            <nav class="col-md-2 d-none d-md-block bg-white border-end min-vh-100">
+                <div class="list-group list-group-flush py-3">
+                    <a href="#" class="list-group-item list-group-item-action active">Dashboard</a>
+                    <a href="#" class="list-group-item list-group-item-action">Article</a>
+                    <a href="#" class="list-group-item list-group-item-action">Report</a>
+                    <a href="#" class="list-group-item list-group-item-action">Profile</a>
+                    <a href="#" class="list-group-item list-group-item-action text-danger">Logout</a>
+                </div>
+            </nav>
+            <main class="col-md-10 ms-sm-auto px-md-4 py-4">
+                <form method="post" enctype="multipart/form-data" class="mb-4 d-flex gap-2 align-items-center">
+                    <input type="text" name="title" class="form-control" placeholder="Название" required>
+                    <input type="file" name="file" class="form-control" required>
+                    <button type="submit" class="btn btn-success">Добавить</button>
+                </form>
+                <ul>
+                {% for material in materials %}
+                    <li>
+                        {{material.title}}
+                        <a href="{{url_for('download_material', material_id = material.id)}}">скачать</a>
+                    </li>
+                {% endfor %}    
+                </ul>
+                <h2>Добро пожаловать</h2>
+                <div class="row row-cols-1 row-cols-md-4 g-4 mb-4">
+                    <div class="col">
+                        <div class="card text-center shadow">
+                            <div class="card-body">
+                                <h2 class="display-6 fw-bold text-success">60.5k</h2>
+                                <p class="text-muted mb-0">article views</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="card text-center shadow">
+                            <div class="card-body">
+                                <h2 class="display-6 fw-bold text-success">150</h2>
+                                <p class="text-muted mb-0">likes</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="card text-center shadow">
+                            <div class="card-body">
+                                <h2 class="display-6 fw-bold text-success">320</h2>
+                                <p class="text-muted mb-0">comments</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="card text-center shadow">
+                            <div class="card-body">
+                                <h2 class="display-6 fw-bold text-success">70</h2>
+                                <p class="text-muted mb-0">published</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+</body>
+</html>

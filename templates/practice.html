@@ -1,0 +1,25 @@
+{%extends 'base.html'%}
+{%block title%}Практика{%endblock%}
+{%block content%}
+   {% if practice%}
+      <h1>{{practice.title}}</h1>
+      <a href="{{url_for('download_material', material_id = practice.id)}}">скачать задание</a>
+      <form method="post" enctype="multipart/form-data">
+         <input type="file" name="user_file" required>
+         <button type="submit">загрузить решение</button>
+      </form>
+    {% elif practices%}
+       <!--Если список практик-->
+       <h1 class="mb-4 text-warning">практические задания</h1>
+       <ul class="list-group">
+            {% for p in practices%}
+               <li class="list-group-item bg-dark">
+                   <a href="/practice/{{p.id}}"><b>{{p.title}}</b></a>
+                   <a href="/material/{{p.id}}/download"class='btn btn-sm btn-outline-success'>скачать</a>
+                </li>
+            {% endfor %}
+       </ul>
+    {% else %}
+        <div>Нет практических заданий</div>
+    {%endif%}
+{%endblock%}

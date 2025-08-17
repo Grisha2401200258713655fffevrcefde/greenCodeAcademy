@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Главная{% endblock %}
+{% block content %}
+
+<!-- Hero-блок -->
+<div class="p-5 mb-4 bg-light rounded-3 text-center shadow">
+    <h1 class="display-3 text-success mb-3">Добро пожаловать в учебный портал</h1>
+    <p class="lead mb-4">Здесь всё — теория, практика, личный кабинет и современные курсы. Сделай свой первый шаг в IT!</p>
+    <a class="btn btn-warning btn-lg px-5 mb-3" href="/programming_languages">Начать обучение</a>
+</div>
+
+<!-- Первая сетка: фичи/основные разделы -->
+<div class="container my-5">
+    <div class="row g-4">
+        <div class="col-md-4">
+            <div class="card bg-dark text-light shadow h-100">
+                <img src="{{ url_for('static', filename='images/theory.jpg') }}" class="card-img-top" alt="Теория" style="max-height:200px; object-fit:cover;">
+                <div class="card-body">
+                    <h5 class="card-title text-warning">Пошаговая теория</h5>
+                    <p class="card-text">Простые и структурированные объяснения сложных тем. Учись шаг за шагом, закрепляй знания с помощью реальных примеров и рекомендаций от опытных наставников.</p>
+                    <a href="/materials" class="btn btn-outline-warning btn-sm">Подробнее</a>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card bg-dark text-light shadow h-100">
+                <img src="{{ url_for('static', filename='images/practice.jpg') }}" class="card-img-top" alt="Практика" style="max-height:400px; object-fit:cover;">
+                <div class="card-body">
+                    <h5 class="card-title text-warning">Практика на каждом этапе</h5>
+                    <p class="card-text">Реальные задачи и упражнения по каждой изученной теме. Получай мгновенную обратную связь, исправляй ошибки и быстро совершенствуй свои навыки на практике.</p>
+                    <a href="/practice" class="btn btn-outline-warning btn-sm">Попробовать</a>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card bg-dark text-light shadow h-100">
+                <img src="{{ url_for('static', filename='images/profile.jpg') }}" class="card-img-top" alt="Профиль" style="max-height:400px; object-fit:cover;">
+                <div class="card-body">
+                    <h5 class="card-title text-warning">Личный кабинет</h5>
+                    <p class="card-text">Отслеживай свои достижения и прогресс. Отмечай пройденные уроки, управляй своим обучением и открывай доступ к новым материалам и заданиям.</p>
+                    <a href="/личный кабинет" class="btn btn-outline-warning btn-sm">В кабинет</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Вторая сетка: отзывы -->
+<div class="container my-5">
+    <h2 class="text-center text-warning mb-4">Отзывы студентов</h2>
+    <div class="row g-4">
+        <div class="col-md-4">
+            <div class="card border-success shadow h-100">
+                <img src="{{ url_for('static', filename='images/александр.png') }}" class="card-img-top" alt="Профиль" style="max-height:400px; object-fit:cover;">
+                <div class="card-body">
+                    <p class="card-text">“Очень понятная структура курсов. После каждой темы — сразу практика. Всё по делу! Уже пишу свой первый Telegram-бот.”</p>
+                    <h6 class="card-subtitle mt-3 mb-2 text-success">— Александр П, студент</h6>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card border-success shadow h-100">
+                <img src="{{ url_for('static', filename='images/марина.png') }}" class="card-img-top" alt="Профиль" style="max-height:400px; object-fit:cover;">
+                <div class="card-body">
+                    <p class="card-text">“У меня не было никакого опыта в программировании, но обучение оказалось очень доступным. Поддержка реально помогает!”</p>
+                    <h6 class="card-subtitle mt-3 mb-2 text-success">— Мария, начинающий программист</h6>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card border-success shadow h-100">
+                <img src="{{ url_for('static', filename='images/егор.png') }}" class="card-img-top" alt="Профиль" style="max-height:400px; object-fit:cover;">
+                <div class="card-body">
+                    <p class="card-text">“Крутая платформа: личный кабинет с прогрессом, удобные задачи, и видно, что всё сделано с умом. Я доволен на 100%.”</p>
+                    <h6 class="card-subtitle mt-3 mb-2 text-success">— Егор С, студент колледжа</h6>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

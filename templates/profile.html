@@ -1,0 +1,44 @@
+{%extends 'base.html'%}
+{% block title %} профиль пользователя {%endblock%}
+{% block content %}
+
+<div class="container my-5">
+    <div class="row">
+        <div class="col-md-3">
+            <img src="" class="img-fluid rounded-circle mb-3">
+            <h3>{{username}}</h3>
+            <p class="text-secondary">student@example.com</p>
+            <a href="/logout" class="btn btn-outline-danger btn-sm w-100">выйти</a>
+        </div>
+        <div class="col-md-9">
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h5>информация</h5>
+                    <p>дата регистрации</p>
+                    <p>всего материалов {{materials_count}}</p>
+                </div>
+            </div>
+
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h5 class="card-title">профиль</h5>
+                    <p><strong>Имя</strong>иван иванов</p>
+                    <p><strong>Email</strong>ivan@kfkfkk.com</p>
+                    <p><strong>data register</strong></p>
+                    <a href="" class="btn btn-outline-secondary btn-sm">Редактировать</a>
+                </div>
+            </div>
+
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h5 class="card-title">прогресс</h5>
+                    <div class="progress mb-2">
+                        <div class="progress-bar bg-success">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{%endblock%}
