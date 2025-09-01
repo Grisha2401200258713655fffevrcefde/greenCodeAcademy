@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+{% block title %}{{ material.title }}{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <h1 class="text-warning">{{ material.title }}</h1>
+  <p class="mb-2">
+    <span class="badge bg-secondary text-uppercase">{{ material.language }}</span>
+    <span class="badge {{ 'bg-info' if material.type == 'theory' else 'bg-warning' }}">{{ material.type }}</span>
+  </p>
+
+  <div class="d-flex gap-2 mb-3">
+    <a class="btn btn-outline-info" href="{{ url_for('material_view', material_id=material.id) }}">Открыть</a>
+    <a class="btn btn-outline-success" href="{{ url_for('download_material', material_id=material.id) }}">Скачать</a>
+  </div>
+</div>
+{% endblock %}

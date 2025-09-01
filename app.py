@@ -1,4 +1,3 @@
-# app.py
 from datetime import datetime
 import io
 import re
@@ -13,17 +12,16 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import or_, func
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
+from dotenv import load_dotenv
 
+from config import Config
 
 # ----------------- НАСТРОЙКИ -----------------
+load_dotenv()  # загрузка .env
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://edu_user:123456@localhost/edu_site'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.secret_key = 'замени_на_длинную_случайную_строку'
-
+app.config.from_object(Config)
 
 db = SQLAlchemy(app)
-
 
 # ----------------- МОДЕЛИ -----------------
 class User(db.Model):
@@ -31,10 +29,7 @@ class User(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(50), unique=True, nullable=False)
-
-    # пароль в виде хэша:
     password_hash = db.Column(db.String(250), nullable=True)
-
     email = db.Column(db.String(120), unique=True, nullable=False)
     full_name = db.Column(db.String(120), nullable=True)
     avatar_url = db.Column(db.String(250), nullable=True)
@@ -46,13 +41,9 @@ class User(db.Model):
         self.password_hash = generate_password_hash(raw_password)
 
     def check_password(self, raw_password: str) -> bool:
-        # чтобы не падать на старых записях без пароля
         if not self.password_hash:
             return False
         return check_password_hash(self.password_hash, raw_password)
-
-    def __repr__(self):
-        return f"<User {self.username}>"
 
 
 class Material(db.Model):
@@ -63,15 +54,9 @@ class Material(db.Model):
     file_data = db.Column(db.LargeBinary, nullable=True)
     file_name = db.Column(db.String(255), nullable=True)
 
-    # theory | practice
-    type = db.Column(db.String(20), nullable=False, default='theory')
-    # python/js/css/go/java/javascript/rust/cpp ...
+    type = db.Column(db.String(20), nullable=False, default='theory')  # theory/practice
     language = db.Column(db.String(50), nullable=False, default='python')
-
     created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
-
-    def __repr__(self):
-        return f"<Material {self.title}>"
 
 
 class MaterialOpen(db.Model):
@@ -89,7 +74,6 @@ class MaterialOpen(db.Model):
 with app.app_context():
     db.create_all()
 
-
 # ----------------- ХЕЛПЕРЫ -----------------
 USERNAME_RE = re.compile(r'^[A-Za-z0-9_]{3,30}$')
 EMAIL_RE = re.compile(r'^[^@]+@[^@]+\.[^@]+$')
@@ -105,16 +89,14 @@ def log_open(material_id: int):
     except Exception:
         db.session.rollback()
 
-
-# ----------------- ГЛАВНАЯ/АВТОРИЗАЦИЯ -----------------
-@app.route('/', methods=['GET'])
+# ----------------- ГЛАВНАЯ -----------------
+@app.route('/')
 def index():
-    # твоя красивая главная (hero, карточки и т.п.)
     return render_template('index.html')
 
+# ----------------- АВТОРИЗАЦИЯ -----------------
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    # отдельная страница логина
     if request.method == 'GET':
         return render_template('login.html')
 
@@ -127,8 +109,9 @@ def login():
         return redirect(url_for('login'))
 
     session['user_id'] = user.id
-    flash('Рады видеть вас 👋', 'success')
+    flash('Добро пожаловать 👋', 'success')
     return redirect(url_for('programming_languages'))
+
 
 @app.route('/logout')
 def logout():
@@ -136,12 +119,10 @@ def logout():
     flash('Вы вышли из аккаунта', 'info')
     return redirect(url_for('index'))
 
-
 # ----------------- РЕГИСТРАЦИЯ -----------------
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     errors, form = {}, {}
-
     if request.method == 'GET':
         return render_template('register.html', errors=errors, form=form)
 
@@ -151,11 +132,10 @@ def register():
     password          = request.form.get('password', '')
     confirm           = request.form.get('confirm', '')
 
-    # Валидация
     if not form['username']:
         errors['username'] = 'Введите логин'
     elif not USERNAME_RE.match(form['username']):
-        errors['username'] = 'Логин: 3–30 символов, латиница/цифры/_'
+        errors['username'] = 'Логин 3–30 символов, латиница/цифры/_'
     elif User.query.filter_by(username=form['username']).first():
         errors['username'] = 'Такой логин уже занят'
 
@@ -174,22 +154,16 @@ def register():
     if errors:
         return render_template('register.html', errors=errors, form=form)
 
-    user = User(
-        username=form['username'],
-        email=form['email'],
-        full_name=form['full_name'] or None
-    )
+    user = User(username=form['username'], email=form['email'], full_name=form['full_name'] or None)
     user.set_password(password)
-
     db.session.add(user)
     db.session.commit()
 
-    flash('Регистрация успешна. Войдите под своим логином.', 'success')
+    flash('Регистрация успешна. Теперь войдите.', 'success')
     return redirect(url_for('login'))
 
-
 # ----------------- ПРОФИЛЬ -----------------
-@app.route('/profile', methods=['GET', 'POST'])
+@app.route('/profile')
 def profile():
     uid = session.get('user_id')
     if not uid:
@@ -200,37 +174,6 @@ def profile():
         session.pop('user_id', None)
         return redirect(url_for('login'))
 
-    # обновление профиля
-    if request.method == 'POST':
-        full_name  = request.form.get('full_name', '').strip()
-        avatar_url = request.form.get('avatar_url', '').strip()
-        new_pwd    = request.form.get('new_password', '')
-        confirm    = request.form.get('confirm', '')
-
-        if full_name or full_name == '':
-            user.full_name = full_name or None
-        if avatar_url or avatar_url == '':
-            user.avatar_url = avatar_url or None
-
-        if new_pwd:
-            if not PWD_RE.match(new_pwd):
-                flash('Новый пароль слабый (8+ символов, буквы верх/низ и цифра)', 'danger')
-                return redirect(url_for('profile'))
-            if new_pwd != confirm:
-                flash('Пароли не совпадают', 'danger')
-                return redirect(url_for('profile'))
-            user.set_password(new_pwd)
-
-        try:
-            db.session.commit()
-            flash('Профиль обновлён', 'success')
-        except Exception as e:
-            db.session.rollback()
-            flash(f'Ошибка сохранения профиля: {e}', 'danger')
-
-        return redirect(url_for('profile'))
-
-    # статистика
     materials_count = Material.query.count()
     theory_count    = Material.query.filter_by(type='theory').count()
     practice_count  = Material.query.filter_by(type='practice').count()
@@ -256,15 +199,14 @@ def profile():
         recent=recent
     )
 
-
 # ----------------- АДМИНКА -----------------
 @app.route('/admin', methods=['GET', 'POST'])
 def admin_dashboard():
     if request.method == 'POST':
         try:
             title    = request.form['title'].strip()
-            mat_type = request.form['mat_type'].strip()    # theory | practice
-            language = request.form['language'].strip()    # python/js/...
+            mat_type = request.form['mat_type'].strip()
+            language = request.form['language'].strip()
             file     = request.files['file']
 
             if not title or not file or file.filename == '':
@@ -274,13 +216,8 @@ def admin_dashboard():
             file_name = secure_filename(file.filename)
             file_data = file.read()
 
-            m = Material(
-                title=title,
-                type=mat_type,
-                language=language,
-                file_name=file_name,
-                file_data=file_data
-            )
+            m = Material(title=title, type=mat_type, language=language,
+                         file_name=file_name, file_data=file_data)
             db.session.add(m)
             db.session.commit()
             flash('Материал добавлен', 'success')
@@ -305,7 +242,6 @@ def delete_material(material_id):
         db.session.rollback()
         flash(f'Ошибка удаления: {e}', 'danger')
     return redirect(url_for('admin_dashboard'))
-
 
 # ----------------- МАТЕРИАЛЫ -----------------
 @app.route('/materials')
@@ -335,18 +271,13 @@ def material_view(material_id):
     fname = (m.file_name or '').lower()
     mime, _ = guess_type(fname)
 
-    # Картинки / PDF / Текст — показываем inline
     if mime and (mime.startswith('image/') or mime == 'application/pdf' or mime.startswith('text/')):
         return send_file(io.BytesIO(m.file_data), mimetype=mime)
 
-    # DOCX → HTML
     if fname.endswith('.docx'):
         doc = Document(io.BytesIO(m.file_data))
         paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-        tables = []
-        for t in doc.tables:
-            rows = [[cell.text.strip() for cell in row.cells] for row in t.rows]
-            tables.append(rows)
+        tables = [[ [cell.text.strip() for cell in row.cells] for row in t.rows] for t in doc.tables]
         return render_template('docx_view.html',
                                material=m,
                                title=m.title,
@@ -364,24 +295,18 @@ def download_material(material_id):
                      as_attachment=True,
                      download_name=m.file_name)
 
-
-# ----------------- ПРАКТИКА/ТЕОРИЯ СПИСКИ -----------------
+# ----------------- СПИСКИ -----------------
 @app.route('/practice')
 def practice_list():
-    items = (Material.query
-             .filter_by(type='practice')
-             .order_by(Material.created_at.desc(), Material.id.desc())
-             .all())
+    items = (Material.query.filter_by(type='practice')
+             .order_by(Material.created_at.desc(), Material.id.desc()).all())
     return render_template('practice.html', practices=items)
 
 @app.route('/theory')
 def theory_list():
-    items = (Material.query
-             .filter_by(type='theory')
-             .order_by(Material.created_at.desc(), Material.id.desc())
-             .all())
-    return render_template('theory.html', materials=items)
-
+    items = (Material.query.filter_by(type='theory')
+             .order_by(Material.created_at.desc(), Material.id.desc()).all())
+    return render_template('materials.html', materials=items, language="theory")
 
 # ----------------- ЯЗЫКИ -----------------
 @app.route('/programming_languages')
@@ -392,15 +317,12 @@ def programming_languages():
                .all())
     return render_template('programming_languages.html', by_lang=by_lang)
 
-
-
 # ----------------- ПОИСК -----------------
 @app.route('/search')
 def search():
     q = request.args.get('q', '').strip()
     if not q:
-        return render_template('poisc.html',
-                               q=q, materials=[], total=0,
+        return render_template('poisc.html', q=q, materials=[], total=0,
                                message='Введите запрос в поле поиска')
 
     term = f"%{q}%"
@@ -413,10 +335,8 @@ def search():
                ))
                .order_by(Material.created_at.desc(), Material.id.desc())
                .all())
-
     return render_template('poisc.html',
                            q=q, materials=results, total=len(results), message=None)
-
 
 # ----------------- ЗАПУСК -----------------
 if __name__ == '__main__':

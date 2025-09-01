@@ -33,3 +33,16 @@ build/
 # Database
 *.sqlite3
 *.db
+# игнорируем .env
+.env
+
+# python
+__pycache__/
+*.pyc
+
+# flask stuff
+instance/
+*.db
+
+# venv
+venv/
