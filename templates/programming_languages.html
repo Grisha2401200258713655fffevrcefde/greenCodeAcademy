@@ -7,14 +7,14 @@
     <h2 class="mb-4">Доступные языки программирования</h2>
     <div class="row">
         {% for lang, count in by_lang %}
-            <div class="col-md-3 text-center mb-4">
-                <a href="{{ url_for('materials_by_language', language=lang) }}">
+            <div class="col-md-3 text-center mb-4 language-card">
+                <a href="{{ url_for('materials_by_language', language=lang) }}" class="text-decoration-none d-block p-3">
                     <img src="{{ url_for('static', filename='images/' ~ lang ~ '.png') }}"
                          alt="{{ lang }}"
                          class="img-fluid rounded mb-2"
                          style="max-height:120px;">
-                    <h5>{{ lang|capitalize }}</h5>
-                    <p>{{ count }} материалов</p>
+                    <h5 class="lang-title">{{ lang|capitalize }}</h5>
+                    <p class="lang-count">{{ count }} материалов</p>
                 </a>
             </div>
         {% endfor %}

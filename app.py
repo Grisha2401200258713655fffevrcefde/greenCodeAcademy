@@ -1,9 +1,8 @@
-from datetime import datetime
+import os
 import io
 import re
+from datetime import datetime
 from mimetypes import guess_type
-
-from docx import Document
 from flask import (
     Flask, render_template, request, redirect,
     url_for, session, flash, send_file
@@ -12,28 +11,26 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import or_, func
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
-from dotenv import load_dotenv
-
+from docx import Document
+from flask_mail import Mail, Message
 from config import Config
 
 # ----------------- НАСТРОЙКИ -----------------
-load_dotenv()  # загрузка .env
 app = Flask(__name__)
 app.config.from_object(Config)
 
 db = SQLAlchemy(app)
+mail = Mail(app)
 
 # ----------------- МОДЕЛИ -----------------
 class User(db.Model):
     __tablename__ = 'user'
-
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(50), unique=True, nullable=False)
     password_hash = db.Column(db.String(250), nullable=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
     full_name = db.Column(db.String(120), nullable=True)
     avatar_url = db.Column(db.String(250), nullable=True)
-
     progress_percent = db.Column(db.Integer, default=0, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
@@ -48,12 +45,10 @@ class User(db.Model):
 
 class Material(db.Model):
     __tablename__ = 'material'
-
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(512), nullable=False)
     file_data = db.Column(db.LargeBinary, nullable=True)
     file_name = db.Column(db.String(255), nullable=True)
-
     type = db.Column(db.String(20), nullable=False, default='theory')  # theory/practice
     language = db.Column(db.String(50), nullable=False, default='python')
     created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
@@ -61,7 +56,6 @@ class Material(db.Model):
 
 class MaterialOpen(db.Model):
     __tablename__ = 'material_open'
-
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False)
     material_id = db.Column(db.Integer, db.ForeignKey('material.id', ondelete='CASCADE'), nullable=False)
@@ -243,20 +237,195 @@ def delete_material(material_id):
         flash(f'Ошибка удаления: {e}', 'danger')
     return redirect(url_for('admin_dashboard'))
 
-# ----------------- МАТЕРИАЛЫ -----------------
+# ----------------- МАТЕРИАЛЫ (СОРТИРОВКА + ПАГИНАЦИЯ) -----------------
+def get_materials_query(sort, filter_type, search, language=None):
+    query = Material.query
+    if language:
+        query = query.filter_by(language=language)
+    if filter_type in ("theory", "practice"):
+        query = query.filter_by(type=filter_type)
+    if search:
+        term = f"%{search}%"
+        query = query.filter(or_(
+            Material.title.ilike(term),
+            Material.language.ilike(term),
+            Material.type.ilike(term)
+        ))
+    if sort == "title":
+        query = query.order_by(Material.title.asc())
+    else:
+        query = query.order_by(Material.created_at.desc(), Material.id.desc())
+    return query
+
 @app.route('/materials')
 def materials():
-    items = Material.query.order_by(Material.created_at.desc(), Material.id.desc()).all()
-    return render_template('materials.html', materials=items, language=None)
+    sort = request.args.get("sort", "date")
+    filter_type = request.args.get("filter")  # theory / practice
+    filter_lang = request.args.get("lang")    # python, js, cpp ...
+    search = request.args.get("search", "").strip()
+    page = request.args.get("page", 1, type=int)
+    per_page = 10
+
+    query = Material.query
+
+    # фильтр по типу
+    if filter_type in ("theory", "practice"):
+        query = query.filter_by(type=filter_type)
+
+    # фильтр по языку
+    if filter_lang:
+        query = query.filter(Material.language.ilike(filter_lang))
+
+    # поиск (без учёта регистра)
+    if search:
+        term = f"%{search}%"
+        query = query.filter(or_(
+            Material.title.ilike(term),
+            Material.language.ilike(term),
+            Material.type.ilike(term)
+        ))
+
+    # сортировка
+    if sort == "title":
+        query = query.order_by(Material.title.asc())
+    else:
+        query = query.order_by(Material.created_at.desc(), Material.id.desc())
+
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    items = pagination.items
+
+    return render_template(
+        "materials.html",
+        materials=items,
+        pagination=pagination,
+        language=None,
+        sort=sort,
+        filter_type=filter_type,
+        filter_lang=filter_lang,
+        search=search
+    )
+
 
 @app.route('/materials/<language>')
 def materials_by_language(language):
-    items = (Material.query
-             .filter_by(language=language)
-             .order_by(Material.created_at.desc(), Material.id.desc())
-             .all())
-    return render_template('materials.html', materials=items, language=language)
+    sort = request.args.get("sort", "date")
+    filter_type = request.args.get("filter")
+    filter_lang = request.args.get("lang")
+    search = request.args.get("search", "").strip()
+    page = request.args.get("page", 1, type=int)
+    per_page = 10
 
+    query = Material.query.filter_by(language=language)
+
+    if filter_type in ("theory", "practice"):
+        query = query.filter_by(type=filter_type)
+
+    if filter_lang:
+        query = query.filter(Material.language.ilike(filter_lang))
+
+    if search:
+        term = f"%{search}%"
+        query = query.filter(or_(
+            Material.title.ilike(term),
+            Material.language.ilike(term),
+            Material.type.ilike(term)
+        ))
+
+    if sort == "title":
+        query = query.order_by(Material.title.asc())
+    else:
+        query = query.order_by(Material.created_at.desc(), Material.id.desc())
+
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    items = pagination.items
+
+    return render_template(
+        "materials.html",
+        materials=items,
+        pagination=pagination,
+        language=language,
+        sort=sort,
+        filter_type=filter_type,
+        filter_lang=filter_lang,
+        search=search
+    )
+
+
+@app.route('/theory')
+def theory_list():
+    sort = request.args.get("sort", "date")
+    filter_type = request.args.get("filter")
+    search = request.args.get("search", "").strip()
+    page = request.args.get("page", 1, type=int)
+    per_page = 10
+
+    query = Material.query.filter_by(type='theory')
+
+    if search:
+        term = f"%{search}%"
+        query = query.filter(or_(
+            Material.title.ilike(term),
+            Material.language.ilike(term),
+            Material.type.ilike(term)
+        ))
+
+    if sort == "title":
+        query = query.order_by(Material.title.asc())
+    else:
+        query = query.order_by(Material.created_at.desc(), Material.id.desc())
+
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    items = pagination.items
+
+    return render_template(
+        "materials.html",
+        materials=items,
+        pagination=pagination,
+        language="theory",
+        sort=sort,
+        filter_type=filter_type,
+        search=search
+    )
+
+
+@app.route('/practice')
+def practice_list():
+    sort = request.args.get("sort", "date")
+    filter_type = request.args.get("filter")
+    search = request.args.get("search", "").strip()
+    page = request.args.get("page", 1, type=int)
+    per_page = 10
+
+    query = Material.query.filter_by(type='practice')
+
+    if search:
+        term = f"%{search}%"
+        query = query.filter(or_(
+            Material.title.ilike(term),
+            Material.language.ilike(term),
+            Material.type.ilike(term)
+        ))
+
+    if sort == "title":
+        query = query.order_by(Material.title.asc())
+    else:
+        query = query.order_by(Material.created_at.desc(), Material.id.desc())
+
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    items = pagination.items
+
+    return render_template(
+        "materials.html",
+        materials=items,
+        pagination=pagination,
+        language="practice",
+        sort=sort,
+        filter_type=filter_type,
+        search=search
+    )
+
+
+# ----------------- МАТЕРИАЛ -----------------
 @app.route('/material/<int:material_id>')
 def material_detail(material_id):
     m = Material.query.get_or_404(material_id)
@@ -295,19 +464,6 @@ def download_material(material_id):
                      as_attachment=True,
                      download_name=m.file_name)
 
-# ----------------- СПИСКИ -----------------
-@app.route('/practice')
-def practice_list():
-    items = (Material.query.filter_by(type='practice')
-             .order_by(Material.created_at.desc(), Material.id.desc()).all())
-    return render_template('practice.html', practices=items)
-
-@app.route('/theory')
-def theory_list():
-    items = (Material.query.filter_by(type='theory')
-             .order_by(Material.created_at.desc(), Material.id.desc()).all())
-    return render_template('materials.html', materials=items, language="theory")
-
 # ----------------- ЯЗЫКИ -----------------
 @app.route('/programming_languages')
 def programming_languages():
@@ -317,26 +473,83 @@ def programming_languages():
                .all())
     return render_template('programming_languages.html', by_lang=by_lang)
 
+# ----------------- ОБРАТНАЯ СВЯЗЬ -----------------
+@app.route("/contact", methods=["GET", "POST"])
+def contact():
+    if request.method == "POST":
+        name = request.form.get("name")
+        email = request.form.get("email")
+        message_text = request.form.get("message")
+
+        msg = Message(
+            subject=f"Сообщение с сайта от {name}",
+            recipients=[app.config["MAIL_USERNAME"]],
+            body=f"От: {name} <{email}>\n\n{message_text}",
+            sender=app.config["MAIL_DEFAULT_SENDER"]
+        )
+
+        try:
+            mail.send(msg)
+            flash("✅ Сообщение успешно отправлено!", "success")
+        except Exception as e:
+            flash(f"❌ Ошибка: {e}", "danger")
+
+        return redirect(url_for("contact"))
+
+    return render_template("contact.html")
+
 # ----------------- ПОИСК -----------------
+def highlight(text, q):
+    """Подсветка совпадений (регистронезависимо)"""
+    if not text or not q:
+        return text
+    pattern = re.compile(re.escape(q), re.IGNORECASE)
+    return pattern.sub(lambda m: f"<mark>{m.group(0)}</mark>", text)
+
 @app.route('/search')
 def search():
     q = request.args.get('q', '').strip()
+    page = request.args.get("page", 1, type=int)
+    per_page = 10
+
     if not q:
-        return render_template('poisc.html', q=q, materials=[], total=0,
-                               message='Введите запрос в поле поиска')
+        return render_template(
+            'poisc.html',
+            q=q,
+            materials=[],
+            total=0,
+            pagination=None,
+            message='Введите запрос в поле поиска'
+        )
 
     term = f"%{q}%"
-    results = (Material.query
-               .filter(or_(
-                   Material.title.ilike(term),
-                   Material.file_name.ilike(term),
-                   Material.language.ilike(term),
-                   Material.type.ilike(term)
-               ))
-               .order_by(Material.created_at.desc(), Material.id.desc())
-               .all())
-    return render_template('poisc.html',
-                           q=q, materials=results, total=len(results), message=None)
+    query = (Material.query
+             .filter(or_(
+                 Material.title.ilike(term),
+                 Material.file_name.ilike(term),
+                 Material.language.ilike(term),
+                 Material.type.ilike(term)
+             )))
+
+    pagination = query.order_by(Material.created_at.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+    results = pagination.items
+
+    # Подсветим найденное слово
+    for r in results:
+        r.title = highlight(r.title, q)
+        r.language = highlight(r.language, q)
+        r.type = highlight(r.type, q)
+
+    return render_template(
+        'poisc.html',
+        q=q,
+        materials=results,
+        total=pagination.total,
+        pagination=pagination,
+        message=None
+    )
 
 # ----------------- ЗАПУСК -----------------
 if __name__ == '__main__':

@@ -1,30 +1,54 @@
-{% extends 'base.html' %}
+{% extends "base.html" %}
+
 {% block title %}Поиск{% endblock %}
+
 {% block content %}
-<div class="container py-4">
-  <h1 class="mb-4">Поиск: “{{ q }}”</h1>
-  {% if message %}
-    <div class="alert alert-secondary">{{ message }}</div>
-  {% else %}
-    <div class="mb-3 text-secondary">Найдено: {{ total }}</div>
-    <ul class="list-group list-group-flush">
-      {% for m in materials %}
-        <li class="list-group-item bg-dark text-light d-flex justify-content-between align-items-center">
-          <div class="me-3">
-            <span class="badge bg-secondary text-uppercase me-2">{{ m.language }}</span>
-            <span class="badge {{ 'bg-info' if m.type=='theory' else 'bg-warning' }} me-2">{{ m.type }}</span>
-            <a class="link-warning text-decoration-none fw-semibold"
-               href="{{ url_for('material_detail', material_id=m.id) }}">{{ m.title }}</a>
-          </div>
-          <div class="d-flex gap-2">
-            <a class="btn btn-sm btn-outline-info" href="{{ url_for('material_view', material_id=m.id) }}">Открыть</a>
-            <a class="btn btn-sm btn-outline-success" href="{{ url_for('download_material', material_id=m.id) }}">Скачать</a>
-          </div>
-        </li>
-      {% else %}
-        <li class="list-group-item bg-dark text-secondary">Ничего не найдено</li>
-      {% endfor %}
+<div class="container mt-5">
+    <h2 class="mb-4">Результаты поиска: "{{ q }}"</h2>
+
+    {% if message %}
+        <div class="alert alert-warning">{{ message }}</div>
+    {% endif %}
+
+    <ul class="list-group">
+        {% for m in materials %}
+            <li class="list-group-item bg-dark text-light">
+                <a href="{{ url_for('material_detail', material_id=m.id) }}" class="text-warning fw-bold">
+                    {{ m.title|safe }}
+                </a>
+                <small class="d-block text-muted">
+                    {{ m.type|capitalize }} • {{ m.language }} • {{ m.created_at.strftime('%d.%m.%Y') }}
+                </small>
+            </li>
+        {% else %}
+            <li class="list-group-item bg-dark text-light">Ничего не найдено.</li>
+        {% endfor %}
     </ul>
-  {% endif %}
+
+    {% if pagination.pages > 1 %}
+    <nav class="mt-4">
+        <ul class="pagination justify-content-center">
+            {% if pagination.has_prev %}
+            <li class="page-item"><a class="page-link" href="{{ url_for('search', q=q, page=pagination.prev_num) }}">Назад</a></li>
+            {% endif %}
+
+            {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+                {% if p %}
+                    {% if p == pagination.page %}
+                    <li class="page-item active"><span class="page-link">{{ p }}</span></li>
+                    {% else %}
+                    <li class="page-item"><a class="page-link" href="{{ url_for('search', q=q, page=p) }}">{{ p }}</a></li>
+                    {% endif %}
+                {% else %}
+                <li class="page-item disabled"><span class="page-link">…</span></li>
+                {% endif %}
+            {% endfor %}
+
+            {% if pagination.has_next %}
+            <li class="page-item"><a class="page-link" href="{{ url_for('search', q=q, page=pagination.next_num) }}">Вперёд</a></li>
+            {% endif %}
+        </ul>
+    </nav>
+    {% endif %}
 </div>
 {% endblock %}

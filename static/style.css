@@ -1,84 +1,37 @@
+/* Тёмный фон сайта */
 body {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-family: sans-serif;
-    line-height: 1.5;
-    min-height: 100px;
-    background: #f3f3f3;
-    flex-direction: column;
-    margin: 0;
+  background: #161d29;
+  color: #f1f2f6;
 }
 
-/* Общие контейнеры */
-.main {
-    background-color: #fff;
-    border-radius: 15px;
-    padding: 10px 20px;
-    transition: transform 0.2s;
-    width: 500px;
-    text-align: center;
+/* Карточки языков */
+.language-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
-.wrap {
-    display: flex;
-    justify-content: center;
-    align-items: center;
+.language-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
 }
 
-/* Заголовки */
-h1 {
-    color: #4CAF50;
+/* Названия языков */
+.language-card .lang-title {
+  color: #ffc107; /* жёлтый */
+  margin-top: 10px;
+  transition: color 0.2s ease;
 }
 
-/* Формы */
-label {
-    display: block;
-    width: 100px;
-    margin-top: 10px;
-    margin-bottom: 5px;
-    text-align: left;
+/* Количество материалов */
+.language-card .lang-count {
+  color: #aaa;
+  transition: color 0.2s ease;
 }
 
-input {
-    display: block;
-    width: 100%;
-    margin-bottom: 15px;
-    padding: 10px;
-    box-sizing: border-box;
-    border: 1px solid #ddd;
-    border-radius: 5px;
+/* Подсветка при наведении */
+.language-card:hover .lang-title {
+  color: #ffda55; /* светлее жёлтый */
 }
 
-button {
-    padding: 15px;
-    border-radius: 10px;
-    margin-top: 15px;
-    margin-bottom: 15px;
-    border: none;
-    color: white;
-    cursor: pointer;
-    background-color: #4CAF50;
-    width: 100%;
-    font-size: 16px;
-}
-
-/* Фото в карточках (Теория, Практика, Профиль) */
-.section-photo {
-  width: 100%;
-  height: 250px;
-  object-fit: cover;
-  object-position: center;
-  border-radius: 6px 6px 0 0;
-}
-
-
-
-/* Фото студентов (Отзывы) */
-.review-photo {
-    width: 100%;
-    height: 400px;
-    object-fit: cover;
-    object-position: top;
-    border-radius: 6px 6px 0 0;
+.language-card:hover .lang-count {
+  color: #ffc107;
 }

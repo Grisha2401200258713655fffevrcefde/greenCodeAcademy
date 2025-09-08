@@ -8,17 +8,105 @@
         {% if language %}Материалы по {{ language|capitalize }}{% else %}Все материалы{% endif %}
     </h2>
 
+    <!-- Панель поиска, фильтрации и сортировки -->
+    <form method="get" class="row g-3 mb-4 align-items-center">
+        <!-- Сортировка -->
+        <div class="col-md-3">
+            <label class="form-label text-light">Сортировка</label>
+            <select name="sort" class="form-select">
+                <option value="date" {% if sort == 'date' %}selected{% endif %}>Сначала новые</option>
+                <option value="title" {% if sort == 'title' %}selected{% endif %}>По названию</option>
+            </select>
+        </div>
+
+        <!-- Фильтр по типу -->
+        <div class="col-md-3">
+            <label class="form-label text-light">Тип</label>
+            <select name="filter" class="form-select">
+                <option value="" {% if not filter_type %}selected{% endif %}>Все</option>
+                <option value="theory" {% if filter_type == 'theory' %}selected{% endif %}>Теория</option>
+                <option value="practice" {% if filter_type == 'practice' %}selected{% endif %}>Практика</option>
+            </select>
+        </div>
+
+        <!-- Фильтр по языку -->
+        <div class="col-md-3">
+            <label class="form-label text-light">Язык</label>
+            <select name="lang" class="form-select">
+                <option value="" {% if not filter_lang %}selected{% endif %}>Все языки</option>
+                <option value="python" {% if filter_lang == 'python' %}selected{% endif %}>Python</option>
+                <option value="js" {% if filter_lang == 'js' %}selected{% endif %}>JavaScript</option>
+                <option value="cpp" {% if filter_lang == 'cpp' %}selected{% endif %}>C++</option>
+                <option value="java" {% if filter_lang == 'java' %}selected{% endif %}>Java</option>
+                <option value="rust" {% if filter_lang == 'rust' %}selected{% endif %}>Rust</option>
+                <option value="go" {% if filter_lang == 'go' %}selected{% endif %}>Go</option>
+            </select>
+        </div>
+
+        <!-- Поиск -->
+        <div class="col-md-2">
+            <label class="form-label text-light">Поиск</label>
+            <input type="text" name="search" class="form-control" placeholder="Введите запрос..." value="{{ search }}">
+        </div>
+
+        <!-- Кнопка -->
+        <div class="col-md-1 d-flex align-items-end">
+            <button type="submit" class="btn btn-warning w-100">Применить</button>
+        </div>
+    </form>
+
+    <!-- Список материалов -->
     <ul class="list-group">
         {% for material in materials %}
             <li class="list-group-item bg-dark text-light d-flex justify-content-between align-items-center">
-                <a href="{{ url_for('material_detail', material_id=material.id) }}" class="text-warning">
-                    {{ material.title }}
-                </a>
+                <div>
+                    <a href="{{ url_for('material_detail', material_id=material.id) }}" class="text-warning fw-bold">
+                        {{ material.title }}
+                    </a>
+                    <small class="d-block text-muted">
+                        {{ material.type|capitalize }} • {{ material.created_at.strftime('%d.%m.%Y %H:%M') }}
+                    </small>
+                </div>
                 <span class="badge bg-secondary">{{ material.language }}</span>
             </li>
         {% else %}
             <li class="list-group-item bg-dark text-light">Материалов пока нет.</li>
         {% endfor %}
     </ul>
+
+    <!-- Пагинация -->
+    {% if pagination.pages > 1 %}
+    <nav aria-label="Навигация страниц" class="mt-4">
+        <ul class="pagination justify-content-center">
+            {% if pagination.has_prev %}
+            <li class="page-item">
+                <a class="page-link" href="{{ url_for(request.endpoint, page=pagination.prev_num, sort=sort, filter=filter_type, lang=filter_lang, search=search, language=language) }}">&laquo; Назад</a>
+            </li>
+            {% else %}
+            <li class="page-item disabled"><span class="page-link">&laquo; Назад</span></li>
+            {% endif %}
+
+            {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+                {% if p %}
+                    {% if p == pagination.page %}
+                    <li class="page-item active"><span class="page-link">{{ p }}</span></li>
+                    {% else %}
+                    <li class="page-item"><a class="page-link" href="{{ url_for(request.endpoint, page=p, sort=sort, filter=filter_type, lang=filter_lang, search=search, language=language) }}">{{ p }}</a></li>
+                    {% endif %}
+                {% else %}
+                <li class="page-item disabled"><span class="page-link">…</span></li>
+                {% endif %}
+            {% endfor %}
+
+            {% if pagination.has_next %}
+            <li class="page-item">
+                <a class="page-link" href="{{ url_for(request.endpoint, page=pagination.next_num, sort=sort, filter=filter_type, lang=filter_lang, search=search, language=language) }}">Вперёд &raquo;</a>
+            </li>
+            {% else %}
+            <li class="page-item disabled"><span class="page-link">Вперёд &raquo;</span></li>
+            {% endif %}
+        </ul>
+    </nav>
+    {% endif %}
 </div>
 {% endblock %}
