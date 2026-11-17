@@ -5,6 +5,7 @@ import click
 import zipfile
 import secrets
 import hmac
+import time
 import hashlib
 import pathlib
 import sqlite3
@@ -28,6 +29,7 @@ from docx import Document
 from flask_mail import Mail, Message
 from flask_wtf.csrf import CSRFProtect
 from config import Config
+from security_features import encrypt_totp, decrypt_totp, match_totp_timecode, scan_upload_with_clamd
 
 # ----------------- НАСТРОЙКИ -----------------
 app = Flask(__name__)
@@ -94,6 +96,15 @@ class AdminAccount(db.Model):
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+
+
+class AdminSecondFactor(db.Model):
+    """Separate table preserves existing administrator schema on upgrade."""
+    __tablename__ = 'admin_second_factor'
+    admin_id = db.Column(db.Integer, db.ForeignKey('admin_account.id', ondelete='CASCADE'),
+                         primary_key=True)
+    encrypted_secret = db.Column(db.LargeBinary, nullable=False)
+    last_timecode = db.Column(db.BigInteger, nullable=False, default=-1)
 
 
 class LoginAttempt(db.Model):
@@ -165,6 +176,105 @@ def set_admin_login(username):
     click.echo('Admin login saved. Older admin sessions are now invalid.')
 
 
+
+@app.cli.command('setup-admin-mfa')
+def setup_admin_mfa():
+    """Enable authenticator-based TOTP without committing any secrets."""
+    import pyotp
+    with app.app_context():
+        account = db.session.get(AdminAccount, 1)
+        if account is None:
+            raise click.ClickException("First run: flask --app app set-admin-login YOUR_LOGIN")
+        key = app.config.get('MFA_ENCRYPTION_KEY')
+        if not key:
+            raise click.ClickException("Set MFA_ENCRYPTION_KEY in the server environment first.")
+        pwd = click.prompt("Current admin password", hide_input=True)
+        if not account.check_password(pwd):
+            raise click.ClickException("Incorrect admin password.")
+        record = db.session.get(AdminSecondFactor, account.id)
+        if record:
+            old = click.prompt("Current authenticator code")
+            try:
+                secret = decrypt_totp(record.encrypted_secret, key)
+            except Exception as error:
+                raise click.ClickException("Cannot decrypt current TOTP secret.") from error
+            if match_totp_timecode(secret, old, record.last_timecode) is None:
+                raise click.ClickException("Existing authenticator code is invalid.")
+        new_secret = pyotp.random_base32()
+        uri = pyotp.TOTP(new_secret).provisioning_uri(
+            name=account.username, issuer_name="GreenCodeAcademy")
+        click.echo("Add this account in your authenticator by entering this private key:")
+        click.echo(new_secret)
+        click.echo("Or use this otpauth URI (keep it private):")
+        click.echo(uri)
+        code = click.prompt("New authenticator code")
+        matched = match_totp_timecode(new_secret, code)
+        if matched is None:
+            raise click.ClickException("New authenticator code invalid: nothing changed.")
+        encrypted = encrypt_totp(new_secret, key)
+        if record is None:
+            record = AdminSecondFactor(admin_id=account.id,
+                                       encrypted_secret=encrypted, last_timecode=matched)
+            db.session.add(record)
+        else:
+            record.encrypted_secret = encrypted
+            record.last_timecode = matched
+        account.session_version = secrets.token_hex(32)
+        db.session.commit()
+        click.echo("Admin 2FA enabled. All old administrator sessions have been revoked.")
+
+
+def activate_admin_session(account):
+    session.clear()
+    session.permanent = True
+    session['csrf_token'] = secrets.token_hex(32)
+    session['admin_id'] = account.id
+    session['admin_session_version'] = account.session_version
+    audit('admin_login', account.username)
+
+
+def admin_second_factor_enabled():
+    return bool(db.session.get(AdminSecondFactor, 1))
+
+
+@app.route('/admin/verify', methods=['GET', 'POST'])
+def admin_verify():
+    pending_id = session.get('pending_admin_id')
+    pending_version = session.get('pending_admin_version')
+    issued = session.get('pending_admin_at', 0)
+    account = db.session.get(AdminAccount, pending_id) if pending_id else None
+    if (account is None or pending_version != account.session_version
+            or not isinstance(issued, int) or time.time() - issued > 300):
+        session.clear()
+        return redirect(url_for('admin_login'))
+    factor = db.session.get(AdminSecondFactor, account.id)
+    if factor is None:
+        session.clear()
+        return redirect(url_for('admin_login'))
+    if request.method == 'POST':
+        if rate_limited('admin-otp', account.username):
+            flash('Too many one-time code attempts. Try again in 15 minutes.', 'danger')
+            return render_template('admin_verify.html'), 429
+        code = request.form.get('code', '').strip()
+        try:
+            secret = decrypt_totp(factor.encrypted_secret,
+                                  app.config.get('MFA_ENCRYPTION_KEY'))
+            matched = match_totp_timecode(secret, code, factor.last_timecode)
+        except Exception:
+            app.logger.exception('Admin MFA check failed')
+            matched = None
+        if matched is None:
+            rate_fail('admin-otp', account.username)
+            flash('Неверный или уже использованный одноразовый код.', 'danger')
+            return render_template('admin_verify.html'), 401
+        factor.last_timecode = matched
+        db.session.commit()
+        rate_clear('admin-otp', account.username)
+        activate_admin_session(account)
+        return redirect(url_for('admin_dashboard'))
+    return render_template('admin_verify.html')
+
+
 def is_admin():
     uid = session.get('admin_id')
     version = session.get('admin_session_version')
@@ -187,12 +297,19 @@ def admin_login():
         account = AdminAccount.query.filter_by(username=username).first()
         if account and account.check_password(password):
             rate_clear('admin', username)
-            session.clear()
-            session.permanent = True
-            session['csrf_token'] = secrets.token_hex(32)
-            session['admin_id'] = account.id
-            session['admin_session_version'] = account.session_version
-            audit('admin_login', account.username)
+            factor = db.session.get(AdminSecondFactor, account.id)
+            if factor:
+                session.clear()
+                session.permanent = True
+                session['csrf_token'] = secrets.token_hex(32)
+                session['pending_admin_id'] = account.id
+                session['pending_admin_version'] = account.session_version
+                session['pending_admin_at'] = int(time.time())
+                return redirect(url_for('admin_verify'))
+            if app.config.get('REQUIRE_ADMIN_MFA'):
+                flash('Для доступа нужно сначала настроить двухфакторный вход на сервере.', 'danger')
+                return render_template('admin_login.html'), 403
+            activate_admin_session(account)
             return redirect(url_for('admin_dashboard'))
         rate_fail('admin', username)
         flash('Неверный логин или пароль', 'danger')
@@ -221,7 +338,8 @@ def admin_required(func):
 
 @app.context_processor
 def inject_global_helpers():
-    return {'is_admin': is_admin, 'student_logged_in': student_session_valid}
+    return {'is_admin': is_admin, 'student_logged_in': student_session_valid,
+            'admin_second_factor_enabled': admin_second_factor_enabled}
 
 
 @app.after_request
@@ -231,8 +349,9 @@ def set_security_headers(response):
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
     if request.path.startswith('/admin'):
         response.headers['Cache-Control'] = 'no-store'
-    if app.config.get('SESSION_COOKIE_SECURE'):
-        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    if app.config.get('APP_ENV') == 'production' and request.is_secure:
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
     return response
 
 
@@ -710,6 +829,19 @@ def admin_dashboard():
                     file_data.decode('utf-8')
                 except UnicodeDecodeError:
                     flash('Текстовые файлы должны быть в UTF-8.', 'danger')
+                    return redirect(url_for('admin_dashboard'))
+
+            if app.config.get('UPLOAD_ANTIVIRUS_REQUIRED'):
+                try:
+                    clean, verdict = scan_upload_with_clamd(
+                        file_data, app.config.get('CLAMAV_SOCKET'))
+                except Exception:
+                    app.logger.exception('ClamAV scan unavailable, denying upload')
+                    clean = False
+                    verdict = 'scanner unavailable'
+                if not clean:
+                    app.logger.warning('Rejected material upload: %s', verdict[:120])
+                    flash('Файл не прошёл антивирусную проверку; загрузка запрещена.', 'danger')
                     return redirect(url_for('admin_dashboard'))
 
             if len(title) > 512:

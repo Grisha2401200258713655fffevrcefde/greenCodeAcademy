@@ -13,6 +13,7 @@
     <a class="navbar-brand fw-bold" href="/">учебный портал</a>
     <div class="ms-auto">
       <a class="btn btn-outline-info btn-sm me-2" href="{{ url_for('admin_audit') }}">Журнал действий</a>
+      <span class="badge {{ 'bg-success' if admin_second_factor_enabled() else 'bg-danger' }} me-2">{{ '2FA включена' if admin_second_factor_enabled() else '2FA не настроена' }}</span>
       <a class="btn btn-outline-light btn-sm me-2" href="/">На сайт</a>
       <form method="post" action="{{ url_for('admin_logout') }}" class="d-inline">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

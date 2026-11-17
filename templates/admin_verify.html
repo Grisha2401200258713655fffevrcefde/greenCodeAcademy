@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+{% block title %}Двухфакторная проверка администратора{% endblock %}
+{% block content %}
+<section class="row justify-content-center py-5"><div class="col-md-7 col-lg-5">
+<div class="card bg-dark rounded-4 shadow"><div class="card-body p-4">
+<h1 class="h4">Подтвердите вход</h1>
+<p class="text-secondary">Введите шестизначный код из приложения-аутентификатора.</p>
+<form method="post" action="{{ url_for('admin_verify') }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<label for="code" class="form-label">Одноразовый код</label>
+<input id="code" type="text" name="code" class="form-control mb-3"
+       inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}"
+       maxlength="6" minlength="6" required autofocus>
+<button type="submit" class="btn btn-success w-100">Подтвердить</button>
+</form></div></div></div></section>
+{% endblock %}
