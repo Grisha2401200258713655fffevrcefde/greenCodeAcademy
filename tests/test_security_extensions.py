@@ -17,7 +17,7 @@ from security_features import (
     encrypt_totp, decrypt_totp, match_totp_timecode, scan_upload_with_clamd
 )
 from scripts.backup_sqlite import backup_sqlite
-from test_app import csrf, add_admin, admin_login
+from test_app import csrf, add_admin, admin_login, client, isolated_db
 
 
 def test_totp_encrypt_valid_verify_and_replay():
