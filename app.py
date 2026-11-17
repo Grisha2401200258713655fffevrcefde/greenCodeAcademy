@@ -360,6 +360,21 @@ def file_too_large(error):
     flash('Файл слишком большой. Максимум 15 МБ.', 'warning')
     return redirect(url_for('admin_dashboard') if is_admin() else url_for('index'))
 
+@app.cli.command('send-test-email')
+@click.argument('recipient')
+def send_test_email(recipient):
+    """Send a single SMTP test email to a specified destination."""
+    if len(recipient) > 120 or not EMAIL_RE.fullmatch(recipient):
+        raise click.ClickException('A valid recipient email address is required.')
+    with app.app_context():
+        if not send_account_mail(
+            recipient,
+            'Green Code Academy: проверка SMTP',
+            'Это тестовое письмо с сервера Green Code Academy.'):
+            raise click.ClickException('SMTP test failed; check server logs.')
+    click.echo('SMTP test email accepted by the configured mail transport.')
+
+
 @app.cli.command('production-check')
 def production_check():
     """Read-only deployment readiness check; never prints secrets."""
