@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
       - name: Compile sources
-        run: python -m compileall -q app.py config.py tests
+        run: python -m compileall -q app.py config.py tests scripts
       - name: Run integration tests
         env:
           SECRET_KEY: "unit-test-secret-key-unique-and-long-enough-123456789"
