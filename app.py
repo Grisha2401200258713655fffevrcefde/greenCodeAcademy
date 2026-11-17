@@ -373,8 +373,19 @@ def verification_required(user):
     return bool(row and row.verified_at is None)
 
 
+def public_link(endpoint, **values):
+    base = app.config.get('PUBLIC_BASE_URL', '').rstrip('/')
+    if not base:
+        app.logger.warning('PUBLIC_BASE_URL is missing; refusing to issue account links')
+        return None
+    with app.test_request_context(base_url=base + '/'):
+        return base + url_for(endpoint, **values)
+
+
 def send_verification(user):
-    link = url_for('verify_email', token=issue_user_token(user, 'verify-email'), _external=True)
+    link = public_link('verify_email', token=issue_user_token(user, 'verify-email'))
+    if not link:
+        return False
     return send_account_mail(user.email, 'Green Code Academy: подтвердите почту',
                              'Для подтверждения адреса откройте ссылку (действует 24 часа):\n' + link)
 
@@ -545,9 +556,10 @@ def forgot_password():
         user = User.query.filter_by(email=email).first()
         if user:
             token = issue_user_token(user, 'reset-password')
-            link = url_for('reset_password', token=token, _external=True)
-            send_account_mail(user.email, 'Green Code Academy: сброс пароля',
-                              'Ссылка для смены пароля действует 30 минут:\n' + link)
+            link = public_link('reset_password', token=token)
+            if link:
+                send_account_mail(user.email, 'Green Code Academy: сброс пароля',
+                                  'Ссылка для смены пароля действует 30 минут:\n' + link)
         flash('Если этот email зарегистрирован, инструкция будет отправлена.', 'info')
         return redirect(url_for('login'))
     return render_template('forgot_password.html')
@@ -757,7 +769,7 @@ def materials():
     sort = request.args.get("sort", "date")
     filter_type = request.args.get("filter")  # theory / practice
     filter_lang = request.args.get("lang")    # python, js, cpp ...
-    search = request.args.get("search", "").strip()
+    search = request.args.get("search", "").strip()[:100]
     page = request.args.get("page", 1, type=int)
     per_page = 10
 
@@ -806,7 +818,7 @@ def materials_by_language(language):
     sort = request.args.get("sort", "date")
     filter_type = request.args.get("filter")
     filter_lang = request.args.get("lang")
-    search = request.args.get("search", "").strip()
+    search = request.args.get("search", "").strip()[:100]
     page = request.args.get("page", 1, type=int)
     per_page = 10
 
@@ -850,7 +862,7 @@ def materials_by_language(language):
 def theory_list():
     sort = request.args.get("sort", "date")
     filter_type = request.args.get("filter")
-    search = request.args.get("search", "").strip()
+    search = request.args.get("search", "").strip()[:100]
     page = request.args.get("page", 1, type=int)
     per_page = 10
 
@@ -887,7 +899,7 @@ def theory_list():
 def practice_list():
     sort = request.args.get("sort", "date")
     filter_type = request.args.get("filter")
-    search = request.args.get("search", "").strip()
+    search = request.args.get("search", "").strip()[:100]
     page = request.args.get("page", 1, type=int)
     per_page = 10
 
@@ -969,6 +981,10 @@ def material_view(material_id):
 
     if fname.endswith('.docx'):
         try:
+            with zipfile.ZipFile(io.BytesIO(m.file_data)) as archive:
+                infos = archive.infolist()
+                if len(infos) > 1500 or sum(info.file_size for info in infos) > 25 * 1024 * 1024:
+                    raise ValueError('DOCX preview exceeds limits')
             doc = Document(io.BytesIO(m.file_data))
         except Exception:
             flash('Не удалось открыть DOCX. Скачайте исходный файл.', 'warning')
@@ -988,9 +1004,11 @@ def material_view(material_id):
 def download_material(material_id):
     m = Material.query.get_or_404(material_id)
     log_open(material_id)
-    return send_file(io.BytesIO(m.file_data),
-                     as_attachment=True,
-                     download_name=m.file_name)
+    response = send_file(io.BytesIO(m.file_data),
+                         as_attachment=True,
+                         download_name=m.file_name or 'material.bin')
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 # ----------------- ЯЗЫКИ -----------------
 @app.route('/programming_languages')
@@ -1005,11 +1023,14 @@ def programming_languages():
 @app.route("/contact", methods=["GET", "POST"])
 def contact():
     if request.method == "POST":
-        name = request.form.get("name")
-        email = request.form.get("email")
-        message_text = request.form.get("message")
+        name = request.form.get('name', '').strip()[:80]
+        email = request.form.get('email', '').strip().lower()[:120]
+        message_text = request.form.get('message', '').strip()
+        if rate_limited('contact', email):
+            flash('Слишком много обращений. Попробуйте через 15 минут.', 'warning')
+            return redirect(url_for('contact'))
 
-        if not name or not email or not message_text or len(message_text) > 4000:
+        if not name or not email or not EMAIL_RE.fullmatch(email) or not message_text or len(message_text) > 4000:
             flash('Заполните все поля (сообщение до 4000 символов).', 'danger')
             return redirect(url_for('contact'))
         recipient = app.config.get('CONTACT_RECIPIENT') or app.config.get('MAIL_USERNAME')
@@ -1017,13 +1038,14 @@ def contact():
             flash('Форма связи пока не настроена. Попробуйте позже.', 'warning')
             return redirect(url_for('contact'))
 
-        msg = Message(
-            subject=f"Сообщение с сайта от {name[:80]}",
-            recipients=[recipient],
-            body=f"От: {name} <{email}>\n\n{message_text}",
-            sender=app.config["MAIL_DEFAULT_SENDER"]
-        )
-
+        if not smtp_ready():
+            flash('Почтовый сервер не настроен.', 'warning')
+            return redirect(url_for('contact'))
+        rate_fail('contact', email)
+        msg = Message(subject=f'Сообщение с сайта от {name}',
+                      recipients=[recipient],
+                      body=f'От: {name} <{email}>\n\n{message_text}',
+                      sender=app.config['MAIL_DEFAULT_SENDER'])
         try:
             mail.send(msg)
             flash("✅ Сообщение успешно отправлено!", "success")
