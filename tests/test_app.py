@@ -304,3 +304,70 @@ def test_register_rejects_weak_password(client):
     assert r.status_code == 400
     with app.app_context():
         assert User.query.count() == 0
+
+
+def test_admin_audit_is_private_and_records_changes(client):
+    assert client.get('/admin/audit').status_code == 302
+    with app.app_context():
+        add_admin()
+    admin_login(client)
+    assert client.get('/admin/audit').status_code == 200
+    response = client.get('/admin/audit')
+    assert b'admin_login' in response.data
+
+
+def test_preview_import_no_mutation(tmp_path):
+    lessons = tmp_path / 'python'
+    lessons.mkdir()
+    (lessons / 'topic.txt').write_text('Hello students', encoding='utf-8')
+    (lessons / 'empty.docx').touch()
+    runner = app.test_cli_runner()
+    preview = runner.invoke(args=['import-materials', str(tmp_path)])
+    assert preview.exit_code == 0, preview.output
+    assert 'DRY-RUN: 1; skipped: 1' in preview.output
+    with app.app_context():
+        assert Material.query.count() == 0
+    apply = runner.invoke(args=['import-materials', str(tmp_path), '--apply'])
+    assert apply.exit_code == 0, apply.output
+    assert 'IMPORTED: 1' in apply.output
+    second = runner.invoke(args=['import-materials', str(tmp_path), '--apply'])
+    assert second.exit_code == 0, second.output
+    assert 'IMPORTED: 0' in second.output
+    with app.app_context():
+        assert Material.query.count() == 1
+
+
+def test_production_email_links_not_based_on_untrusted_host(client):
+    from app import public_link
+    app.config['PUBLIC_BASE_URL'] = 'https://academy.example.org'
+    with app.app_context():
+        link = public_link('forgot_password')
+        assert link == 'https://academy.example.org/forgot-password'
+        assert 'attacker' not in link
+
+
+def test_registration_rate_limit_blocks_sixth_request(client):
+    for i in range(5):
+        r = client.post('/register', data={
+            'csrf_token': csrf(client, '/register'),
+            'username': f'student{i}', 'email': f'student{i}@example.test',
+            'password': 'TestStrongPassword123', 'confirm': 'TestStrongPassword123'
+        })
+        assert r.status_code == 302, (i, r.data[:200])
+    r = client.post('/register', data={
+        'csrf_token': csrf(client, '/register'),
+        'username': 'student5', 'email': 'student5@example.test',
+        'password': 'TestStrongPassword123', 'confirm': 'TestStrongPassword123'
+    })
+    assert r.status_code == 302
+    with app.app_context():
+        assert User.query.count() == 5
+
+
+def test_admin_upload_csrf_is_enforced(client):
+    with app.app_context():
+        add_admin()
+    admin_login(client)
+    assert client.post('/admin', data={
+        'title': 'Unsafe', 'mat_type': 'theory', 'language': 'python'
+    }).status_code == 400
