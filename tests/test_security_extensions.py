@@ -209,3 +209,81 @@ def test_requiring_mfa_blocks_password_only(client):
         assert client.get('/admin').status_code == 302
     finally:
         app.config['REQUIRE_ADMIN_MFA'] = old
+
+
+def test_import_cli_denies_unscanned_files(tmp_path):
+    lessons = tmp_path / "python"
+    lessons.mkdir()
+    (lessons / "new.txt").write_text("safe-looking text", encoding="utf-8")
+    previous = app.config.get('UPLOAD_ANTIVIRUS_REQUIRED')
+    app.config['UPLOAD_ANTIVIRUS_REQUIRED'] = True
+    try:
+        with patch('app.scan_upload_with_clamd', side_effect=OSError('scanner offline')):
+            result = app.test_cli_runner().invoke(args=[
+                'import-materials', str(tmp_path), '--apply'])
+        assert result.exit_code == 0, result.output
+        assert 'IMPORTED: 0; skipped: 1' in result.output
+        with app.app_context():
+            assert Material.query.count() == 0
+    finally:
+        app.config['UPLOAD_ANTIVIRUS_REQUIRED'] = previous
+
+
+def test_production_config_enforces_https_mfa_antivirus():
+    import subprocess
+    import sys
+    env = os.environ.copy()
+    env.update({
+        'APP_ENV': 'production',
+        'PUBLIC_BASE_URL': 'https://academy.example.test',
+        'MFA_ENCRYPTION_KEY': Fernet.generate_key().decode(),
+        'SECRET_KEY': 'test-production-key-at-least-32-characters',
+        'SESSION_COOKIE_SECURE': 'false',
+        'REQUIRE_ADMIN_MFA': 'false',
+        'UPLOAD_ANTIVIRUS_REQUIRED': 'false',
+    })
+    result = subprocess.run(
+        [sys.executable, '-c',
+         'from config import Config; assert Config.SESSION_COOKIE_SECURE; '
+         'assert Config.REQUIRE_ADMIN_MFA; assert Config.UPLOAD_ANTIVIRUS_REQUIRED; '
+         'assert Config.TRUSTED_HOSTS == ["academy.example.test"]'],
+        env=env, capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    env['PUBLIC_BASE_URL'] = 'http://academy.example.test'
+    denied = subprocess.run(
+        [sys.executable, '-c', 'from config import Config'],
+        env=env, capture_output=True, text=True
+    )
+    assert denied.returncode != 0
+
+
+def test_postgres_backup_helper_uses_pg_environment_not_password_in_args(tmp_path, monkeypatch):
+    from pathlib import Path
+    from types import SimpleNamespace
+    from scripts.backup_postgres import backup_postgres
+    import scripts.backup_postgres as module
+    monkeypatch.setenv('PGDATABASE', 'example_test_database')
+    monkeypatch.setenv('PGPASSWORD', 'dummy-secret')
+    calls = []
+    def stub(args, **kwargs):
+        calls.append(args)
+        assert not any('dummy-secret' in str(part) for part in args)
+        if args[0] == 'pg_dump':
+            Path(args[-1]).write_bytes(b'SIMULATED_ARCHIVE_NOT_A_REAL_DUMP')
+            return SimpleNamespace(returncode=0)
+        if args[0] == 'pg_restore':
+            return SimpleNamespace(returncode=0, stdout='TEST DUMP CONTENTS\n')
+        raise AssertionError('Unexpected subprocess')
+    with patch.object(module.subprocess, 'run', side_effect=stub):
+        result = backup_postgres(tmp_path / 'backups')
+    assert result.exists()
+    assert result.stat().st_mode & 0o777 == 0o600
+    assert len(calls) == 2
+
+
+def test_production_check_reports_unconfigured_environment_without_secrets():
+    result = app.test_cli_runner().invoke(args=['production-check'])
+    assert result.exit_code != 0
+    assert 'Production readiness FAILED' in result.output
+    assert 'unit-test-secret-key' not in result.output
