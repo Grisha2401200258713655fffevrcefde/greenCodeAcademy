@@ -5,16 +5,23 @@ import click
 import zipfile
 import secrets
 import hmac
+import hashlib
+import pathlib
+import sqlite3
+import tempfile
+from datetime import timedelta
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from functools import wraps
 from urllib.parse import urlparse
 from datetime import datetime
 from mimetypes import guess_type
 from flask import (
     Flask, render_template, request, redirect,
-    url_for, session, flash, send_file, abort
+    url_for, session, flash, send_file, abort, current_app
 )
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import or_, func
+from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from docx import Document
@@ -89,6 +96,38 @@ class AdminAccount(db.Model):
         return check_password_hash(self.password_hash, password)
 
 
+class LoginAttempt(db.Model):
+    """Database-backed fixed-window throttle for shared deployments."""
+    __tablename__ = 'login_attempt'
+    signature = db.Column(db.String(64), primary_key=True)
+    hits = db.Column(db.Integer, nullable=False, default=0)
+    started_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+
+class SecurityAudit(db.Model):
+    """Minimal activity log, without credentials or raw IP addresses."""
+    __tablename__ = 'security_audit'
+    id = db.Column(db.Integer, primary_key=True)
+    action = db.Column(db.String(80), nullable=False)
+    subject = db.Column(db.String(120), nullable=True)
+    ip_hash = db.Column(db.String(32), nullable=False)
+    at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+
+class EmailVerification(db.Model):
+    """Existing accounts without a row remain usable after an upgrade."""
+    __tablename__ = 'email_verification'
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), primary_key=True)
+    verified_at = db.Column(db.DateTime, nullable=True)
+
+
+class StudentSession(db.Model):
+    """Allows password changes and resets to invalidate older sessions."""
+    __tablename__ = 'student_session'
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), primary_key=True)
+    version = db.Column(db.String(64), nullable=False)
+
+
 class PracticeCompletion(db.Model):
     """A learner may mark a practical material as complete once."""
     __tablename__ = 'practice_completion'
@@ -142,20 +181,29 @@ def admin_login():
     if request.method == 'POST':
         username = request.form.get('username', '').strip()[:50]
         password = request.form.get('password', '')
+        if rate_limited('admin', username):
+            flash('Слишком много попыток. Попробуйте через 15 минут.', 'danger')
+            return render_template('admin_login.html'), 429
         account = AdminAccount.query.filter_by(username=username).first()
         if account and account.check_password(password):
+            rate_clear('admin', username)
             session.clear()
             session.permanent = True
             session['admin_id'] = account.id
             session['admin_session_version'] = account.session_version
+            audit('admin_login', account.username)
             return redirect(url_for('admin_dashboard'))
+        rate_fail('admin', username)
         flash('Неверный логин или пароль', 'danger')
         return render_template('admin_login.html'), 401
     return render_template('admin_login.html')
 
 
+
 @app.route('/admin/logout', methods=['POST'])
 def admin_logout():
+    if is_admin():
+        audit('admin_logout')
     session.clear()
     flash('Вы вышли из панели администратора', 'info')
     return redirect(url_for('admin_login'))
@@ -172,7 +220,7 @@ def admin_required(func):
 
 @app.context_processor
 def inject_global_helpers():
-    return {'is_admin': is_admin}
+    return {'is_admin': is_admin, 'student_logged_in': student_session_valid}
 
 
 @app.after_request
@@ -182,24 +230,168 @@ def set_security_headers(response):
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
     if request.path.startswith('/admin'):
         response.headers['Cache-Control'] = 'no-store'
+    if app.config.get('SESSION_COOKIE_SECURE'):
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
     return response
 
 
 @app.errorhandler(413)
 def file_too_large(error):
     flash('Файл слишком большой. Максимум 15 МБ.', 'warning')
-    return redirect(url_for('admin_dashboard'))
+    return redirect(url_for('admin_dashboard') if is_admin() else url_for('index'))
+
+# ----------------- AUTH, EMAIL & SECURITY HELPERS -----------------
+RATE_WINDOW = timedelta(minutes=15)
+RATE_LIMIT = 5
+
+
+def anonymized_key(*parts):
+    value = ':'.join(str(part).lower().strip() for part in parts)
+    return hmac.new(app.config['SECRET_KEY'].encode('utf-8'),
+                    value.encode('utf-8'), hashlib.sha256).hexdigest()
+
+
+def client_hash():
+    # Do not trust client-supplied X-Forwarded-For headers.
+    return anonymized_key('ip', request.remote_addr or 'unknown')[:32]
+
+
+def audit(action, subject=None):
+    db.session.add(SecurityAudit(action=action, subject=(subject or '')[:120],
+                                 ip_hash=client_hash()))
+    db.session.commit()
+
+
+def rate_keys(scope, identity):
+    return (anonymized_key('rate', scope, 'address', request.remote_addr or 'unknown'),
+            anonymized_key('rate', scope, 'identity', identity))
+
+
+def rate_limited(scope, identity):
+    cutoff = datetime.utcnow() - RATE_WINDOW
+    return any((attempt := db.session.get(LoginAttempt, key)) is not None
+               and attempt.started_at >= cutoff and attempt.hits >= RATE_LIMIT
+               for key in rate_keys(scope, identity))
+
+
+def rate_fail(scope, identity):
+    now = datetime.utcnow()
+    for key in rate_keys(scope, identity):
+        attempt = db.session.get(LoginAttempt, key)
+        if attempt is None:
+            db.session.add(LoginAttempt(signature=key, hits=1, started_at=now))
+        elif attempt.started_at < now - RATE_WINDOW:
+            attempt.hits = 1
+            attempt.started_at = now
+        else:
+            attempt.hits += 1
+    db.session.commit()
+
+
+def rate_clear(scope, identity):
+    # Clear both the account and IP counters on successful authentication.
+    for key in rate_keys(scope, identity):
+        attempt = db.session.get(LoginAttempt, key)
+        if attempt:
+            db.session.delete(attempt)
+    db.session.commit()
+
+
+def token_serializer(salt):
+    return URLSafeTimedSerializer(app.config['SECRET_KEY'], salt=salt)
+
+
+def password_fingerprint(user):
+    return hashlib.sha256(user.password_hash.encode('utf-8')).hexdigest()[:24]
+
+
+def issue_user_token(user, purpose):
+    return token_serializer(purpose).dumps(
+        {'id': user.id, 'fp': password_fingerprint(user)})
+
+
+def read_user_token(token, purpose, max_age):
+    try:
+        data = token_serializer(purpose).loads(token, max_age=max_age)
+        user = db.session.get(User, data['id'])
+        if user and hmac.compare_digest(data['fp'], password_fingerprint(user)):
+            return user
+    except (BadSignature, SignatureExpired, KeyError, ValueError, TypeError):
+        return None
+    return None
+
+
+def smtp_ready():
+    return bool(app.config.get('MAIL_USERNAME') and app.config.get('MAIL_PASSWORD')
+                and app.config.get('MAIL_DEFAULT_SENDER'))
+
+
+def send_account_mail(recipient, subject, body):
+    if not smtp_ready():
+        return False
+    try:
+        mail.send(Message(subject=subject, recipients=[recipient],
+                          body=body, sender=app.config['MAIL_DEFAULT_SENDER']))
+        return True
+    except Exception:
+        app.logger.exception('Could not send account email')
+        return False
+
+
+def student_session_valid():
+    uid = session.get('user_id')
+    version = session.get('student_session_version')
+    if not uid or not version:
+        return False
+    record = db.session.get(StudentSession, uid)
+    return bool(record and hmac.compare_digest(record.version, version))
+
+
+def new_student_session(user):
+    record = db.session.get(StudentSession, user.id)
+    if record is None:
+        record = StudentSession(user_id=user.id, version=secrets.token_hex(32))
+        db.session.add(record)
+        db.session.commit()
+    session.clear()
+    session.permanent = True
+    session['user_id'] = user.id
+    session['student_session_version'] = record.version
+
+
+def revoke_student_sessions(user):
+    record = db.session.get(StudentSession, user.id)
+    if record is None:
+        record = StudentSession(user_id=user.id, version=secrets.token_hex(32))
+        db.session.add(record)
+    else:
+        record.version = secrets.token_hex(32)
+
+
+def verification_required(user):
+    row = db.session.get(EmailVerification, user.id)
+    return bool(row and row.verified_at is None)
+
+
+def send_verification(user):
+    link = url_for('verify_email', token=issue_user_token(user, 'verify-email'), _external=True)
+    return send_account_mail(user.email, 'Green Code Academy: подтвердите почту',
+                             'Для подтверждения адреса откройте ссылку (действует 24 часа):\n' + link)
+
 
 # ----------------- ХЕЛПЕРЫ -----------------
 USERNAME_RE = re.compile(r'^[A-Za-z0-9_]{3,30}$')
 EMAIL_RE = re.compile(r'^[^@]+@[^@]+\.[^@]+$')
-PWD_RE = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$')
+PWD_RE = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{12,128}$')
 
 def log_open(material_id: int):
     uid = session.get('user_id')
-    if not uid:
+    if not student_session_valid():
         return
     try:
+        recently = MaterialOpen.query.filter_by(user_id=uid, material_id=material_id).order_by(MaterialOpen.opened_at.desc()).first()
+        if recently and recently.opened_at > datetime.utcnow() - timedelta(minutes=5):
+            return
         db.session.add(MaterialOpen(user_id=uid, material_id=material_id))
         db.session.commit()
     except Exception:
@@ -216,18 +408,27 @@ def login():
     if request.method == 'GET':
         return render_template('login.html')
 
-    username = request.form.get('username', '').strip()
+    username = request.form.get('username', '').strip()[:50]
     password = request.form.get('password', '')
+    if rate_limited('student', username):
+        flash('Слишком много попыток. Попробуйте через 15 минут.', 'danger')
+        return render_template('login.html'), 429
 
     user = User.query.filter_by(username=username).first()
     if not user or not user.check_password(password):
+        rate_fail('student', username)
         flash('Неверный логин или пароль', 'danger')
-        return redirect(url_for('login'))
+        return render_template('login.html'), 401
 
-    session.clear()
-    session['user_id'] = user.id
+    if verification_required(user):
+        flash('Подтвердите адрес электронной почты перед входом.', 'warning')
+        return redirect(url_for('resend_verification'))
+
+    rate_clear('student', username)
+    new_student_session(user)
     flash('Добро пожаловать 👋', 'success')
     return redirect(url_for('programming_languages'))
+
 
 
 @app.route('/logout', methods=['POST'])
@@ -243,47 +444,141 @@ def register():
     if request.method == 'GET':
         return render_template('register.html', errors=errors, form=form)
 
-    form['username']  = request.form.get('username', '').strip()
-    form['email']     = request.form.get('email', '').strip()
+    form['username'] = request.form.get('username', '').strip()
+    form['email'] = request.form.get('email', '').strip().lower()
     form['full_name'] = request.form.get('full_name', '').strip()
-    password          = request.form.get('password', '')
-    confirm           = request.form.get('confirm', '')
+    password = request.form.get('password', '')
+    confirm = request.form.get('confirm', '')
 
-    if not form['username']:
-        errors['username'] = 'Введите логин'
-    elif not USERNAME_RE.match(form['username']):
-        errors['username'] = 'Логин 3–30 символов, латиница/цифры/_'
+    if rate_limited('register', form['email']):
+        flash('Слишком много запросов. Попробуйте позже.', 'warning')
+        return redirect(url_for('register'))
+
+    if not USERNAME_RE.fullmatch(form['username']):
+        errors['username'] = 'Логин: 3–30 символов, латиница, цифры и _'
     elif User.query.filter_by(username=form['username']).first():
         errors['username'] = 'Такой логин уже занят'
 
-    if not form['email']:
-        errors['email'] = 'Введите e-mail'
-    elif not EMAIL_RE.match(form['email']):
-        errors['email'] = 'Некорректный e-mail'
+    if len(form['email']) > 120 or not EMAIL_RE.fullmatch(form['email']):
+        errors['email'] = 'Введите корректный адрес электронной почты'
     elif User.query.filter_by(email=form['email']).first():
-        errors['email'] = 'Такой e-mail уже используется'
+        errors['email'] = 'Этот email уже используется'
 
-    if not PWD_RE.match(password):
-        errors['password'] = 'Пароль слабый (8+ символов, буквы верх/низ и цифра)'
+    if len(form['full_name']) > 120:
+        errors['full_name'] = 'Слишком длинное имя'
+    if len(password) > 128 or not PWD_RE.fullmatch(password):
+        errors['password'] = 'Пароль: 12–128 символов, большие и маленькие буквы, цифры'
     if password != confirm:
         errors['confirm'] = 'Пароли не совпадают'
 
-    if errors:
-        return render_template('register.html', errors=errors, form=form)
+    if app.config.get('REQUIRE_EMAIL_VERIFICATION') and not smtp_ready():
+        flash('Регистрация временно недоступна: почтовый сервер не настроен.', 'danger')
+        return redirect(url_for('register'))
 
-    user = User(username=form['username'], email=form['email'], full_name=form['full_name'] or None)
+    if errors:
+        rate_fail('register', form['email'])
+        return render_template('register.html', errors=errors, form=form), 400
+
+    user = User(username=form['username'], email=form['email'],
+                full_name=form['full_name'] or None)
     user.set_password(password)
     db.session.add(user)
-    db.session.commit()
+    try:
+        db.session.flush()
+        if app.config.get('REQUIRE_EMAIL_VERIFICATION'):
+            db.session.add(EmailVerification(user_id=user.id))
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        flash('Логин или почта уже используются.', 'danger')
+        return redirect(url_for('register'))
+
+    if app.config.get('REQUIRE_EMAIL_VERIFICATION'):
+        if send_verification(user):
+            flash('Письмо для подтверждения отправлено. Проверьте почту.', 'success')
+        else:
+            flash('Письмо не отправлено. Используйте повторную отправку подтверждения.', 'warning')
+        return redirect(url_for('login'))
 
     flash('Регистрация успешна. Теперь войдите.', 'success')
     return redirect(url_for('login'))
+
+
+@app.route('/verify-email/<token>')
+def verify_email(token):
+    user = read_user_token(token, 'verify-email', 24 * 3600)
+    if not user:
+        flash('Ссылка подтверждения недействительна или устарела.', 'danger')
+        return redirect(url_for('login'))
+    row = db.session.get(EmailVerification, user.id)
+    if row and row.verified_at is None:
+        row.verified_at = datetime.utcnow()
+        db.session.commit()
+    flash('Электронная почта подтверждена. Теперь можно войти.', 'success')
+    return redirect(url_for('login'))
+
+
+@app.route('/resend-verification', methods=['GET', 'POST'])
+def resend_verification():
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip().lower()[:120]
+        if rate_limited('verify-resend', email):
+            flash('Слишком много запросов. Попробуйте позже.', 'warning')
+            return redirect(url_for('resend_verification'))
+        rate_fail('verify-resend', email)
+        user = User.query.filter_by(email=email).first()
+        if user and verification_required(user):
+            send_verification(user)
+        flash('Если для адреса требуется подтверждение, письмо отправлено.', 'info')
+        return redirect(url_for('login'))
+    return render_template('resend_verification.html')
+
+
+@app.route('/forgot-password', methods=['GET', 'POST'])
+def forgot_password():
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip().lower()[:120]
+        if rate_limited('password-reset', email):
+            flash('Слишком много запросов. Попробуйте через 15 минут.', 'warning')
+            return redirect(url_for('forgot_password'))
+        rate_fail('password-reset', email)
+        user = User.query.filter_by(email=email).first()
+        if user:
+            token = issue_user_token(user, 'reset-password')
+            link = url_for('reset_password', token=token, _external=True)
+            send_account_mail(user.email, 'Green Code Academy: сброс пароля',
+                              'Ссылка для смены пароля действует 30 минут:\n' + link)
+        flash('Если этот email зарегистрирован, инструкция будет отправлена.', 'info')
+        return redirect(url_for('login'))
+    return render_template('forgot_password.html')
+
+
+@app.route('/reset-password/<token>', methods=['GET', 'POST'])
+def reset_password(token):
+    user = read_user_token(token, 'reset-password', 30 * 60)
+    if not user:
+        flash('Ссылка истекла или уже недействительна.', 'danger')
+        return redirect(url_for('forgot_password'))
+    if request.method == 'POST':
+        password = request.form.get('password', '')
+        confirm = request.form.get('confirm', '')
+        if len(password) > 128 or not PWD_RE.fullmatch(password) or password != confirm:
+            flash('Пароль должен быть сложным и совпадать с подтверждением.', 'danger')
+            return render_template('reset_password.html', token=token), 400
+        user.set_password(password)
+        revoke_student_sessions(user)
+        db.session.commit()
+        session.clear()
+        flash('Пароль изменён. Войдите с новым паролем.', 'success')
+        return redirect(url_for('login'))
+    return render_template('reset_password.html', token=token)
+
 
 # ----------------- ПРОФИЛЬ -----------------
 @app.route('/profile', methods=['GET', 'POST'])
 def profile():
     uid = session.get('user_id')
-    if not uid:
+    if not student_session_valid():
         return redirect(url_for('login'))
 
     user = db.session.get(User, uid)
@@ -315,10 +610,13 @@ def profile():
                 flash('Новый пароль должен содержать 8+ символов, большие и маленькие буквы и цифру. Пароли должны совпадать.', 'danger')
                 return redirect(url_for('profile'))
             user.set_password(new_password)
+            revoke_student_sessions(user)
 
         user.full_name = full_name or None
         user.avatar_url = avatar_url or None
         db.session.commit()
+        if new_password or confirm:
+            new_student_session(user)
         flash('Настройки профиля сохранены.', 'success')
         return redirect(url_for('profile'))
 
@@ -385,7 +683,10 @@ def admin_dashboard():
                 if not zipfile.is_zipfile(io.BytesIO(file_data)):
                     abort(400)
                 with zipfile.ZipFile(io.BytesIO(file_data)) as archive:
-                    if 'word/document.xml' not in archive.namelist():
+                    infos = archive.infolist()
+                    if (len(infos) > 1500 or
+                            sum(info.file_size for info in infos) > 25 * 1024 * 1024 or
+                            'word/document.xml' not in archive.namelist()):
                         abort(400)
             if extension in ('.txt', '.md'):
                 try:
@@ -394,10 +695,14 @@ def admin_dashboard():
                     flash('Текстовые файлы должны быть в UTF-8.', 'danger')
                     return redirect(url_for('admin_dashboard'))
 
+            if len(title) > 512:
+                flash('Название не должно быть длиннее 512 символов.', 'danger')
+                return redirect(url_for('admin_dashboard'))
             m = Material(title=title, type=mat_type, language=language,
                          file_name=file_name, file_data=file_data)
             db.session.add(m)
             db.session.commit()
+            audit('material_upload', str(m.id))
             flash('Материал добавлен', 'success')
         except Exception:
             db.session.rollback()
@@ -406,7 +711,7 @@ def admin_dashboard():
 
         return redirect(url_for('admin_dashboard'))
 
-    materials = Material.query.order_by(Material.id.desc()).all()
+    materials = Material.query.order_by(Material.id.desc()).limit(200).all()
     return render_template('admin_panel.html', materials=materials)
 
 
@@ -415,8 +720,11 @@ def admin_dashboard():
 def delete_material(material_id):
     m = Material.query.get_or_404(material_id)
     try:
+        MaterialOpen.query.filter_by(material_id=material_id).delete(synchronize_session=False)
+        PracticeCompletion.query.filter_by(material_id=material_id).delete(synchronize_session=False)
         db.session.delete(m)
         db.session.commit()
+        audit('material_delete', str(material_id))
         flash('Материал удалён', 'success')
     except Exception:
         db.session.rollback()
@@ -617,7 +925,7 @@ def practice_list():
 def material_detail(material_id):
     m = Material.query.get_or_404(material_id)
     log_open(material_id)
-    done = bool(session.get('user_id') and PracticeCompletion.query.filter_by(
+    done = bool(student_session_valid() and PracticeCompletion.query.filter_by(
         user_id=session['user_id'], material_id=m.id).first())
     return render_template('material_detail.html', material=m, done=done)
 
@@ -625,15 +933,18 @@ def material_detail(material_id):
 @app.route('/material/<int:material_id>/complete', methods=['POST'])
 def complete_material(material_id):
     uid = session.get('user_id')
-    if not uid:
+    if not student_session_valid():
         return redirect(url_for('login'))
     material = Material.query.get_or_404(material_id)
     if material.type != 'practice':
         abort(400)
     existing = PracticeCompletion.query.filter_by(user_id=uid, material_id=material_id).first()
     if existing is None:
-        db.session.add(PracticeCompletion(user_id=uid, material_id=material_id))
-        db.session.commit()
+        try:
+            db.session.add(PracticeCompletion(user_id=uid, material_id=material_id))
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
         flash('Практика отмечена как выполненная.', 'success')
     else:
         db.session.delete(existing)
@@ -649,8 +960,12 @@ def material_view(material_id):
     fname = (m.file_name or '').lower()
     mime, _ = guess_type(fname)
 
-    if mime and (mime.startswith('image/') or mime == 'application/pdf' or mime.startswith('text/')):
-        return send_file(io.BytesIO(m.file_data), mimetype=mime, download_name=m.file_name)
+    if fname.endswith(('.txt', '.md')):
+        return send_file(io.BytesIO(m.file_data), mimetype='text/plain; charset=utf-8', download_name=m.file_name)
+    if mime in ('image/png', 'image/jpeg', 'application/pdf'):
+        response = send_file(io.BytesIO(m.file_data), mimetype=mime, download_name=m.file_name)
+        response.headers['Content-Security-Policy'] = "sandbox; default-src 'none'"
+        return response
 
     if fname.endswith('.docx'):
         try:
