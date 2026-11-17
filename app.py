@@ -277,6 +277,8 @@ def rate_limited(scope, identity):
 
 def rate_fail(scope, identity):
     now = datetime.utcnow()
+    if secrets.randbelow(50) == 0:
+        LoginAttempt.query.filter(LoginAttempt.started_at < now - RATE_WINDOW).delete(synchronize_session=False)
     for key in rate_keys(scope, identity):
         attempt = db.session.get(LoginAttempt, key)
         if attempt is None:
@@ -506,6 +508,7 @@ def register():
         flash('Логин или почта уже используются.', 'danger')
         return redirect(url_for('register'))
 
+    rate_fail('register', form['email'])
     if app.config.get('REQUIRE_EMAIL_VERIFICATION'):
         if send_verification(user):
             flash('Письмо для подтверждения отправлено. Проверьте почту.', 'success')
@@ -727,6 +730,13 @@ def admin_dashboard():
 
     materials = Material.query.order_by(Material.id.desc()).limit(200).all()
     return render_template('admin_panel.html', materials=materials)
+
+
+@app.route('/admin/audit')
+@admin_required
+def admin_audit():
+    events = SecurityAudit.query.order_by(SecurityAudit.id.desc()).limit(100).all()
+    return render_template('admin_audit.html', events=events)
 
 
 @app.route('/material/<int:material_id>/delete', methods=['POST'])
@@ -1058,6 +1068,62 @@ def contact():
         return redirect(url_for("contact"))
 
     return render_template("contact.html")
+
+@app.cli.command('import-materials')
+@click.argument('directory', type=click.Path(exists=True, file_okay=False, path_type=pathlib.Path))
+@click.option('--apply', is_flag=True, help='Commit the import; dry-run by default.')
+def import_materials(directory, apply):
+    """Import loose DOCX, PDF and text lessons without modifying originals."""
+    allowed = {'.docx', '.pdf', '.txt', '.md'}
+    langs = {'js': 'javascript', 'javascript': 'javascript', 'python': 'python',
+             'css': 'css', 'c++': 'cpp', 'cpp': 'cpp', 'java': 'java',
+             'go': 'go', 'rust': 'rust', 'node.js': 'node.js'}
+    imported = skipped = 0
+    with app.app_context():
+        for path in sorted(directory.rglob('*')):
+            if (not path.is_file() or path.suffix.lower() not in allowed
+                    or any(part.startswith('.') for part in path.relative_to(directory).parts)):
+                continue
+            try:
+                size = path.stat().st_size
+                if size == 0 or size > app.config['MAX_CONTENT_LENGTH']:
+                    skipped += 1
+                    continue
+                rel = path.relative_to(directory)
+                language = langs.get(rel.parts[0].lower(), 'html' if directory.name.lower() == 'veb' else 'other')
+                title = ' / '.join(rel.with_suffix('').parts)[:512]
+                material_type = 'practice' if any(
+                    tag in str(rel).lower() for tag in ('practice', 'практика', 'задания')) else 'theory'
+                if Material.query.filter_by(title=title, language=language,
+                                            type=material_type).first():
+                    skipped += 1
+                    continue
+                data = path.read_bytes()
+                if path.suffix.lower() == '.pdf' and not data.startswith(b'%PDF-'):
+                    skipped += 1
+                    continue
+                if path.suffix.lower() == '.docx':
+                    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                        infos = archive.infolist()
+                        if (len(infos) > 1500 or
+                                sum(info.file_size for info in infos) > 25 * 1024 * 1024 or
+                                'word/document.xml' not in archive.namelist()):
+                            skipped += 1
+                            continue
+                if path.suffix.lower() in ('.txt', '.md'):
+                    data.decode('utf-8')
+            except (OSError, UnicodeError, ValueError, zipfile.BadZipFile):
+                skipped += 1
+                continue
+
+            imported += 1
+            if apply:
+                db.session.add(Material(title=title, type=material_type,
+                                        language=language, file_name=path.name, file_data=data))
+        if apply:
+            db.session.commit()
+    click.echo(f'{"IMPORTED" if apply else "DRY-RUN"}: {imported}; skipped: {skipped}')
+
 
 # ----------------- ПОИСК -----------------
 @app.route('/search')
