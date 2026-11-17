@@ -30,7 +30,7 @@
         <li class="nav-item"><a class="nav-link" href="{{ url_for('theory_list') }}">Теория</a></li>
         <li class="nav-item"><a class="nav-link" href="{{ url_for('practice_list') }}">Практика</a></li>
         <li class="nav-item"><a class="nav-link" href="{{ url_for('programming_languages') }}">Языки</a></li>
-        {% if session.get('user_id') %}
+        {% if student_logged_in() %}
           <li class="nav-item"><a class="nav-link" href="{{ url_for('profile') }}">Профиль</a></li>
         {% endif %}
         {% if is_admin() %}<li class="nav-item"><a class="nav-link" href="{{ url_for('admin_dashboard') }}">Управление</a></li>{% endif %}
@@ -44,7 +44,7 @@
       </form>
 
       <!-- Кнопки -->
-      {% if session.get('user_id') %}
+      {% if student_logged_in() %}
         <form method="post" action="{{ url_for('logout') }}" class="d-inline me-2"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-warning">Выход</button></form>
       {% else %}
         <a class="btn btn-sm btn-outline-warning me-2" href="{{ url_for('login') }}">Войти</a>

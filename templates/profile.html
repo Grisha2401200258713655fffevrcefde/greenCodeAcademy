@@ -14,7 +14,7 @@
           <h4 class="mb-1">{{ user.full_name or user.username }}</h4>
           <div class="text-secondary">{{ user.email }}</div>
           <div class="small text-secondary">На сайте с {{ user.created_at.strftime('%d.%m.%Y') }}</div>
-          <a href="{{ url_for('logout') }}" class="btn btn-outline-danger btn-sm w-100 mt-3">Выйти</a>
+          <form action="{{ url_for('logout') }}" method="post" class="mt-3"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-outline-danger btn-sm w-100" type="submit">Выйти</button></form>
         </div>
       </div>
     </div>
