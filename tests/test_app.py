@@ -41,7 +41,13 @@ def csrf(client, page='/login'):
     assert response.status_code == 200, (page, response.status_code)
     match = re.search(rb'name="csrf_token"\s+value="([^"]+)"', response.data)
     assert match, f'Missing CSRF token for {page}'
-    return match.group(1).decode()
+    signed = match.group(1).decode()
+    from itsdangerous import URLSafeTimedSerializer
+    decoded = URLSafeTimedSerializer(app.secret_key, salt='wtf-csrf-token').loads(signed)
+    with client.session_transaction() as sess:
+        raw = sess.get('csrf_token')
+    assert decoded == raw, f'GET {page}: HTML token and cookie session diverged: {decoded[:8]} vs {str(raw)[:8]}'
+    return signed
 
 
 def add_user(name='student'):
