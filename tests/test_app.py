@@ -90,7 +90,8 @@ def test_admin_access_isolated(client):
     assert client.get('/admin').status_code == 302
     with app.app_context():
         add_admin()
-    assert admin_login(client).status_code == 302
+    admin_response = admin_login(client)
+    assert admin_response.status_code == 302, admin_response.data.decode()[:1000]
     assert client.get('/admin').status_code == 200
     assert client.get('/admin').headers['Cache-Control'] == 'no-store'
 
