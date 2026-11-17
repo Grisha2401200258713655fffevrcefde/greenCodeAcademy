@@ -29,7 +29,7 @@ class Config:
     MAIL_DEFAULT_SENDER = os.getenv('MAIL_DEFAULT_SENDER') or MAIL_USERNAME
     CONTACT_RECIPIENT = os.getenv('CONTACT_RECIPIENT')
 
-    if PUBLIC_BASE_URL and (not PUBLIC_BASE_URL.startswith(('https://', 'http://localhost:', 'http://127.0.0.1:')) or '/' not in PUBLIC_BASE_URL[8:]):
+    if PUBLIC_BASE_URL and not PUBLIC_BASE_URL.startswith(('https://', 'http://localhost:', 'http://127.0.0.1:')):
         raise RuntimeError('PUBLIC_BASE_URL must use HTTPS, except for local development.')
     if REQUIRE_EMAIL_VERIFICATION and not PUBLIC_BASE_URL:
         raise RuntimeError('PUBLIC_BASE_URL is required for email verification.')
