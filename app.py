@@ -1,11 +1,15 @@
 import os
 import io
 import re
+import click
+import zipfile
+from functools import wraps
+from urllib.parse import urlparse
 from datetime import datetime
 from mimetypes import guess_type
 from flask import (
     Flask, render_template, request, redirect,
-    url_for, session, flash, send_file
+    url_for, session, flash, send_file, abort
 )
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import or_, func
@@ -13,6 +17,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from docx import Document
 from flask_mail import Mail, Message
+from flask_wtf.csrf import CSRFProtect
 from config import Config
 
 # ----------------- НАСТРОЙКИ -----------------
@@ -21,6 +26,7 @@ app.config.from_object(Config)
 
 db = SQLAlchemy(app)
 mail = Mail(app)
+csrf = CSRFProtect(app)
 
 # ----------------- МОДЕЛИ -----------------
 class User(db.Model):
@@ -65,8 +71,71 @@ class MaterialOpen(db.Model):
     material = db.relationship('Material')
 
 
+class AdminGrant(db.Model):
+    """Admin permissions are assigned only through the server-side CLI."""
+    __tablename__ = 'admin_grant'
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), primary_key=True)
+
+
+class PracticeCompletion(db.Model):
+    """A learner may mark a practical material as complete once."""
+    __tablename__ = 'practice_completion'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False)
+    material_id = db.Column(db.Integer, db.ForeignKey('material.id', ondelete='CASCADE'), nullable=False)
+    completed_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    __table_args__ = (db.UniqueConstraint('user_id', 'material_id', name='uq_practice_completion'),)
+
+
 with app.app_context():
     db.create_all()
+
+
+@app.cli.command('grant-admin')
+@click.argument('username')
+def grant_admin(username):
+    """Grant site administration to an existing user (run on the server)."""
+    with app.app_context():
+        user = User.query.filter_by(username=username).first()
+        if user is None:
+            raise click.ClickException('User does not exist: ' + username)
+        if db.session.get(AdminGrant, user.id) is None:
+            db.session.add(AdminGrant(user_id=user.id))
+            db.session.commit()
+        click.echo('Admin access granted to ' + username)
+
+
+def is_admin():
+    user_id = session.get('user_id')
+    return bool(user_id and db.session.get(AdminGrant, user_id))
+
+
+def admin_required(func):
+    @wraps(func)
+    def inner(*args, **kwargs):
+        if not is_admin():
+            abort(403)
+        return func(*args, **kwargs)
+    return inner
+
+
+@app.context_processor
+def inject_global_helpers():
+    return {'is_admin': is_admin}
+
+
+@app.after_request
+def set_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    return response
+
+
+@app.errorhandler(413)
+def file_too_large(error):
+    flash('Файл слишком большой. Максимум 15 МБ.', 'warning')
+    return redirect(url_for('admin_dashboard'))
 
 # ----------------- ХЕЛПЕРЫ -----------------
 USERNAME_RE = re.compile(r'^[A-Za-z0-9_]{3,30}$')
@@ -102,14 +171,15 @@ def login():
         flash('Неверный логин или пароль', 'danger')
         return redirect(url_for('login'))
 
+    session.clear()
     session['user_id'] = user.id
     flash('Добро пожаловать 👋', 'success')
     return redirect(url_for('programming_languages'))
 
 
-@app.route('/logout')
+@app.route('/logout', methods=['POST'])
 def logout():
-    session.pop('user_id', None)
+    session.clear()
     flash('Вы вышли из аккаунта', 'info')
     return redirect(url_for('index'))
 
@@ -157,44 +227,74 @@ def register():
     return redirect(url_for('login'))
 
 # ----------------- ПРОФИЛЬ -----------------
-@app.route('/profile')
+@app.route('/profile', methods=['GET', 'POST'])
 def profile():
     uid = session.get('user_id')
     if not uid:
         return redirect(url_for('login'))
 
-    user = User.query.get(uid)
-    if not user:
-        session.pop('user_id', None)
+    user = db.session.get(User, uid)
+    if user is None:
+        session.clear()
         return redirect(url_for('login'))
 
+    if request.method == 'POST':
+        full_name = request.form.get('full_name', '').strip()
+        avatar_url = request.form.get('avatar_url', '').strip()
+        old_password = request.form.get('current_password', '')
+        new_password = request.form.get('new_password', '')
+        confirm = request.form.get('confirm', '')
+
+        if len(full_name) > 120 or len(avatar_url) > 250:
+            flash('Имя или ссылка на аватар слишком длинные.', 'danger')
+            return redirect(url_for('profile'))
+        if avatar_url:
+            parsed = urlparse(avatar_url)
+            if parsed.scheme != 'https' or not parsed.netloc or parsed.username or parsed.password:
+                flash('Для аватара разрешены только корректные HTTPS-ссылки.', 'danger')
+                return redirect(url_for('profile'))
+
+        if new_password or confirm:
+            if not user.check_password(old_password):
+                flash('Введите текущий пароль для его изменения.', 'danger')
+                return redirect(url_for('profile'))
+            if not PWD_RE.match(new_password) or new_password != confirm:
+                flash('Новый пароль должен содержать 8+ символов, большие и маленькие буквы и цифру. Пароли должны совпадать.', 'danger')
+                return redirect(url_for('profile'))
+            user.set_password(new_password)
+
+        user.full_name = full_name or None
+        user.avatar_url = avatar_url or None
+        db.session.commit()
+        flash('Настройки профиля сохранены.', 'success')
+        return redirect(url_for('profile'))
+
     materials_count = Material.query.count()
-    theory_count    = Material.query.filter_by(type='theory').count()
-    practice_count  = Material.query.filter_by(type='practice').count()
+    theory_count = Material.query.filter_by(type='theory').count()
+    practice_count = Material.query.filter_by(type='practice').count()
+    completed_count = (db.session.query(PracticeCompletion)
+                       .join(Material, PracticeCompletion.material_id == Material.id)
+                       .filter(PracticeCompletion.user_id == user.id, Material.type == 'practice')
+                       .count())
+    progress_percent = round(completed_count * 100 / practice_count) if practice_count else 0
 
     by_lang = (db.session.query(Material.language, func.count(Material.id))
                .group_by(Material.language)
-               .order_by(func.count(Material.id).desc())
-               .all())
+               .order_by(func.count(Material.id).desc()).all())
 
     recent = (MaterialOpen.query
               .filter_by(user_id=user.id)
-              .order_by(MaterialOpen.opened_at.desc())
-              .limit(10)
-              .all())
+              .order_by(MaterialOpen.opened_at.desc()).limit(10).all())
 
-    return render_template(
-        'profile.html',
-        user=user,
-        materials_count=materials_count,
-        theory_count=theory_count,
-        practice_count=practice_count,
-        by_lang=by_lang,
-        recent=recent
-    )
+    return render_template('profile.html', user=user, materials_count=materials_count,
+                           theory_count=theory_count, practice_count=practice_count,
+                           completed_count=completed_count, progress_percent=progress_percent,
+                           by_lang=by_lang, recent=recent)
+
 
 # ----------------- АДМИНКА -----------------
 @app.route('/admin', methods=['GET', 'POST'])
+@admin_required
 def admin_dashboard():
     if request.method == 'POST':
         try:
@@ -207,17 +307,49 @@ def admin_dashboard():
                 flash('Укажите название и выберите файл', 'warning')
                 return redirect(url_for('admin_dashboard'))
 
-            file_name = secure_filename(file.filename)
+            if mat_type not in ('theory', 'practice'):
+                abort(400)
+            if not language or len(language) > 50:
+                abort(400)
+            extension = os.path.splitext(file.filename.lower())[1]
+            allowed = {'.pdf', '.docx', '.txt', '.md', '.png', '.jpg', '.jpeg'}
+            if extension not in allowed:
+                flash('Разрешены PDF, DOCX, TXT, MD, PNG и JPG.', 'danger')
+                return redirect(url_for('admin_dashboard'))
+
+            file_name = secure_filename(file.filename) or ('material' + extension)
             file_data = file.read()
+            if not file_data:
+                flash('Файл пустой.', 'danger')
+                return redirect(url_for('admin_dashboard'))
+            if extension == '.pdf' and not file_data.startswith(b'%PDF-'):
+                abort(400)
+            if extension == '.png' and not file_data.startswith(b'\x89PNG\r\n\x1a\n'):
+                abort(400)
+            if extension in ('.jpg', '.jpeg') and not file_data.startswith(b'\xff\xd8\xff'):
+                abort(400)
+            if extension == '.docx':
+                if not zipfile.is_zipfile(io.BytesIO(file_data)):
+                    abort(400)
+                with zipfile.ZipFile(io.BytesIO(file_data)) as archive:
+                    if 'word/document.xml' not in archive.namelist():
+                        abort(400)
+            if extension in ('.txt', '.md'):
+                try:
+                    file_data.decode('utf-8')
+                except UnicodeDecodeError:
+                    flash('Текстовые файлы должны быть в UTF-8.', 'danger')
+                    return redirect(url_for('admin_dashboard'))
 
             m = Material(title=title, type=mat_type, language=language,
                          file_name=file_name, file_data=file_data)
             db.session.add(m)
             db.session.commit()
             flash('Материал добавлен', 'success')
-        except Exception as e:
+        except Exception:
             db.session.rollback()
-            flash(f'Ошибка при добавлении: {e}', 'danger')
+            app.logger.exception('Failed to add a material')
+            flash('Не удалось добавить материал.', 'danger')
 
         return redirect(url_for('admin_dashboard'))
 
@@ -226,15 +358,17 @@ def admin_dashboard():
 
 
 @app.route('/material/<int:material_id>/delete', methods=['POST'])
+@admin_required
 def delete_material(material_id):
     m = Material.query.get_or_404(material_id)
     try:
         db.session.delete(m)
         db.session.commit()
         flash('Материал удалён', 'success')
-    except Exception as e:
+    except Exception:
         db.session.rollback()
-        flash(f'Ошибка удаления: {e}', 'danger')
+        app.logger.exception('Failed to delete material')
+        flash('Не удалось удалить материал.', 'danger')
     return redirect(url_for('admin_dashboard'))
 
 # ----------------- МАТЕРИАЛЫ (СОРТИРОВКА + ПАГИНАЦИЯ) -----------------
@@ -430,7 +564,29 @@ def practice_list():
 def material_detail(material_id):
     m = Material.query.get_or_404(material_id)
     log_open(material_id)
-    return render_template('material_detail.html', material=m)
+    done = bool(session.get('user_id') and PracticeCompletion.query.filter_by(
+        user_id=session['user_id'], material_id=m.id).first())
+    return render_template('material_detail.html', material=m, done=done)
+
+
+@app.route('/material/<int:material_id>/complete', methods=['POST'])
+def complete_material(material_id):
+    uid = session.get('user_id')
+    if not uid:
+        return redirect(url_for('login'))
+    material = Material.query.get_or_404(material_id)
+    if material.type != 'practice':
+        abort(400)
+    existing = PracticeCompletion.query.filter_by(user_id=uid, material_id=material_id).first()
+    if existing is None:
+        db.session.add(PracticeCompletion(user_id=uid, material_id=material_id))
+        db.session.commit()
+        flash('Практика отмечена как выполненная.', 'success')
+    else:
+        db.session.delete(existing)
+        db.session.commit()
+        flash('Отметка выполнения снята.', 'info')
+    return redirect(url_for('material_detail', material_id=material_id))
 
 @app.route('/material/<int:material_id>/view')
 def material_view(material_id):
@@ -441,10 +597,14 @@ def material_view(material_id):
     mime, _ = guess_type(fname)
 
     if mime and (mime.startswith('image/') or mime == 'application/pdf' or mime.startswith('text/')):
-        return send_file(io.BytesIO(m.file_data), mimetype=mime)
+        return send_file(io.BytesIO(m.file_data), mimetype=mime, download_name=m.file_name)
 
     if fname.endswith('.docx'):
-        doc = Document(io.BytesIO(m.file_data))
+        try:
+            doc = Document(io.BytesIO(m.file_data))
+        except Exception:
+            flash('Не удалось открыть DOCX. Скачайте исходный файл.', 'warning')
+            return redirect(url_for('material_detail', material_id=material_id))
         paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
         tables = [[ [cell.text.strip() for cell in row.cells] for row in t.rows] for t in doc.tables]
         return render_template('docx_view.html',
@@ -481,9 +641,17 @@ def contact():
         email = request.form.get("email")
         message_text = request.form.get("message")
 
+        if not name or not email or not message_text or len(message_text) > 4000:
+            flash('Заполните все поля (сообщение до 4000 символов).', 'danger')
+            return redirect(url_for('contact'))
+        recipient = app.config.get('CONTACT_RECIPIENT') or app.config.get('MAIL_USERNAME')
+        if not recipient:
+            flash('Форма связи пока не настроена. Попробуйте позже.', 'warning')
+            return redirect(url_for('contact'))
+
         msg = Message(
-            subject=f"Сообщение с сайта от {name}",
-            recipients=[app.config["MAIL_USERNAME"]],
+            subject=f"Сообщение с сайта от {name[:80]}",
+            recipients=[recipient],
             body=f"От: {name} <{email}>\n\n{message_text}",
             sender=app.config["MAIL_DEFAULT_SENDER"]
         )
@@ -491,66 +659,37 @@ def contact():
         try:
             mail.send(msg)
             flash("✅ Сообщение успешно отправлено!", "success")
-        except Exception as e:
-            flash(f"❌ Ошибка: {e}", "danger")
+        except Exception:
+            app.logger.exception('Contact mail failed')
+            flash('Не удалось отправить сообщение. Попробуйте позже.', 'danger')
 
         return redirect(url_for("contact"))
 
     return render_template("contact.html")
 
 # ----------------- ПОИСК -----------------
-def highlight(text, q):
-    """Подсветка совпадений (регистронезависимо)"""
-    if not text or not q:
-        return text
-    pattern = re.compile(re.escape(q), re.IGNORECASE)
-    return pattern.sub(lambda m: f"<mark>{m.group(0)}</mark>", text)
-
 @app.route('/search')
 def search():
-    q = request.args.get('q', '').strip()
-    page = request.args.get("page", 1, type=int)
-    per_page = 10
-
+    q = request.args.get('q', '').strip()[:100]
+    page = request.args.get('page', 1, type=int)
     if not q:
-        return render_template(
-            'poisc.html',
-            q=q,
-            materials=[],
-            total=0,
-            pagination=None,
-            message='Введите запрос в поле поиска'
-        )
+        return render_template('poisc.html', q=q, materials=[], total=0,
+                               pagination=None, message='Введите запрос в поле поиска')
 
-    term = f"%{q}%"
-    query = (Material.query
-             .filter(or_(
-                 Material.title.ilike(term),
-                 Material.file_name.ilike(term),
-                 Material.language.ilike(term),
-                 Material.type.ilike(term)
-             )))
-
+    term = f'%{q}%'
+    query = Material.query.filter(or_(
+        Material.title.ilike(term),
+        Material.file_name.ilike(term),
+        Material.language.ilike(term),
+        Material.type.ilike(term)
+    ))
     pagination = query.order_by(Material.created_at.desc()).paginate(
-        page=page, per_page=per_page, error_out=False
-    )
-    results = pagination.items
+        page=page, per_page=10, error_out=False)
+    return render_template('poisc.html', q=q, materials=pagination.items,
+                           total=pagination.total, pagination=pagination,
+                           message=None)
 
-    # Подсветим найденное слово
-    for r in results:
-        r.title = highlight(r.title, q)
-        r.language = highlight(r.language, q)
-        r.type = highlight(r.type, q)
-
-    return render_template(
-        'poisc.html',
-        q=q,
-        materials=results,
-        total=pagination.total,
-        pagination=pagination,
-        message=None
-    )
 
 # ----------------- ЗАПУСК -----------------
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=os.getenv('FLASK_DEBUG') == '1')
