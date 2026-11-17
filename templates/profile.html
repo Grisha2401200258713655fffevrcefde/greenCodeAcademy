@@ -9,7 +9,7 @@
       <div class="card bg-dark text-light h-100">
         <div class="card-body text-center">
           <img
-            src="{{ user.avatar_url or ('https://i.pravatar.cc/150?u=' ~ user.username) }}"
+            src="{{ user.avatar_url or url_for('static', filename='images/profile.jpg') }}"
             alt="" class="rounded-circle mb-3" style="width: 120px; height: 120px; object-fit: cover;">
           <h4 class="mb-1">{{ user.full_name or user.username }}</h4>
           <div class="text-secondary">{{ user.email }}</div>
@@ -61,14 +61,14 @@
           <div class="progress">
             <div class="progress-bar bg-success"
                  role="progressbar"
-                 style="width: {{ user.progress_percent or 0 }}%;"
-                 aria-valuenow="{{ user.progress_percent or 0 }}"
+                 style="width: {{ progress_percent }}%;"
+                 aria-valuenow="{{ progress_percent }}"
                  aria-valuemin="0" aria-valuemax="100">
-              {{ user.progress_percent or 0 }}%
+              {{ progress_percent }}%
             </div>
           </div>
           <div class="text-secondary small mt-2">
-            Прогресс обновляется по мере выполнения практик.
+            Выполнено {{ completed_count }} из {{ practice_count }} практик. Выполнение отмечается самостоятельно, без автоматической проверки.
           </div>
         </div>
       </div>
@@ -78,6 +78,7 @@
         <div class="card-body">
           <h5 class="mb-3">Редактирование профиля</h5>
           <form method="post" novalidate>
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="row g-2">
               <div class="col-md-6">
                 <label class="form-label">Имя и фамилия</label>
@@ -87,7 +88,7 @@
                 <label class="form-label">Аватар (URL)</label>
                 <input type="url" name="avatar_url" value="{{ user.avatar_url or '' }}" class="form-control">
               </div>
-              <div class="col-md-6">
+              <div class="col-md-6"><label class="form-label">Текущий пароль (при смене пароля)</label><input class="form-control" name="current_password" type="password"></div><div class="col-md-6">
                 <label class="form-label">Новый пароль</label>
                 <input type="password" name="new_password" class="form-control" placeholder="Оставьте пустым чтобы не менять">
               </div>

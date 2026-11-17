@@ -36,6 +36,7 @@
 
       <!-- Форма добавления -->
       <form method="post" enctype="multipart/form-data" class="row g-2 align-items-center mb-4">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="col-12 col-md-4">
           <input type="text" name="title" class="form-control" placeholder="Название" required/>
         </div>
@@ -92,7 +93,7 @@
                     <div class="btn-group">
                       <a class="btn btn-sm btn-outline-primary" href="{{ url_for('download_material', material_id=m.id) }}">Скачать</a>
                       <a class="btn btn-sm btn-outline-light" href="{{ url_for('material_detail', material_id=m.id) }}">Подробнее</a>
-                      <form method="post" action="{{ url_for('delete_material', material_id=m.id) }}" style="display:inline">
+                      <form method="post" action="{{ url_for('delete_material', material_id=m.id) }}" style="display:inline"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Удалить материал?');">
                           Удалить
                         </button>
