@@ -189,6 +189,7 @@ def admin_login():
             rate_clear('admin', username)
             session.clear()
             session.permanent = True
+            session['csrf_token'] = secrets.token_hex(32)
             session['admin_id'] = account.id
             session['admin_session_version'] = account.session_version
             audit('admin_login', account.username)
@@ -355,6 +356,7 @@ def new_student_session(user):
         db.session.commit()
     session.clear()
     session.permanent = True
+    session['csrf_token'] = secrets.token_hex(32)
     session['user_id'] = user.id
     session['student_session_version'] = record.version
 
