@@ -3,6 +3,8 @@ import io
 import re
 import click
 import zipfile
+import secrets
+import hmac
 from functools import wraps
 from urllib.parse import urlparse
 from datetime import datetime
@@ -71,10 +73,20 @@ class MaterialOpen(db.Model):
     material = db.relationship('Material')
 
 
-class AdminGrant(db.Model):
-    """Admin permissions are assigned only through the server-side CLI."""
-    __tablename__ = 'admin_grant'
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), primary_key=True)
+class AdminAccount(db.Model):
+    """Dedicated administrator account separate from student registration."""
+    __tablename__ = 'admin_account'
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(50), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255), nullable=False)
+    session_version = db.Column(db.String(64), nullable=False)
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+        self.session_version = secrets.token_hex(32)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
 
 
 class PracticeCompletion(db.Model):
@@ -91,30 +103,69 @@ with app.app_context():
     db.create_all()
 
 
-@app.cli.command('grant-admin')
+@app.cli.command('set-admin-login')
 @click.argument('username')
-def grant_admin(username):
-    """Grant site administration to an existing user (run on the server)."""
+def set_admin_login(username):
+    """Create or reset the independent admin account."""
+    if not re.fullmatch(r'[A-Za-z0-9_]{3,30}', username):
+        raise click.ClickException('Login must contain 3-30 Latin characters, numbers or underscores.')
+    password = click.prompt('Admin password', hide_input=True, confirmation_prompt=True)
+    if (len(password) < 12 or len(password) > 128 or
+            not re.search('[a-z]', password) or not re.search('[A-Z]', password) or
+            not re.search('[0-9]', password)):
+        raise click.ClickException('Use 12-128 chars, uppercase, lowercase and numbers.')
     with app.app_context():
-        user = User.query.filter_by(username=username).first()
-        if user is None:
-            raise click.ClickException('User does not exist: ' + username)
-        if db.session.get(AdminGrant, user.id) is None:
-            db.session.add(AdminGrant(user_id=user.id))
-            db.session.commit()
-        click.echo('Admin access granted to ' + username)
+        account = db.session.get(AdminAccount, 1)
+        if not account:
+            account = AdminAccount(id=1, username=username)
+            db.session.add(account)
+        else:
+            account.username = username
+        account.set_password(password)
+        db.session.commit()
+    click.echo('Admin login saved. Older admin sessions are now invalid.')
 
 
 def is_admin():
-    user_id = session.get('user_id')
-    return bool(user_id and db.session.get(AdminGrant, user_id))
+    uid = session.get('admin_id')
+    version = session.get('admin_session_version')
+    if not uid or not isinstance(version, str):
+        return False
+    account = db.session.get(AdminAccount, uid)
+    return bool(account and hmac.compare_digest(account.session_version, version))
+
+
+@app.route('/admin/login', methods=['GET', 'POST'])
+def admin_login():
+    if is_admin():
+        return redirect(url_for('admin_dashboard'))
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()[:50]
+        password = request.form.get('password', '')
+        account = AdminAccount.query.filter_by(username=username).first()
+        if account and account.check_password(password):
+            session.clear()
+            session.permanent = True
+            session['admin_id'] = account.id
+            session['admin_session_version'] = account.session_version
+            return redirect(url_for('admin_dashboard'))
+        flash('Неверный логин или пароль', 'danger')
+        return render_template('admin_login.html'), 401
+    return render_template('admin_login.html')
+
+
+@app.route('/admin/logout', methods=['POST'])
+def admin_logout():
+    session.clear()
+    flash('Вы вышли из панели администратора', 'info')
+    return redirect(url_for('admin_login'))
 
 
 def admin_required(func):
     @wraps(func)
     def inner(*args, **kwargs):
         if not is_admin():
-            abort(403)
+            return redirect(url_for('admin_login'))
         return func(*args, **kwargs)
     return inner
 
@@ -129,6 +180,8 @@ def set_security_headers(response):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    if request.path.startswith('/admin'):
+        response.headers['Cache-Control'] = 'no-store'
     return response
 
 
