@@ -28,4 +28,4 @@ jobs:
           SESSION_COOKIE_SECURE: "false"
           REQUIRE_EMAIL_VERIFICATION: "false"
           PUBLIC_BASE_URL: "http://localhost:5000"
-        run: python -m pytest -q --disable-warnings --maxfail=1
+        run: python -m pytest -q --disable-warnings
