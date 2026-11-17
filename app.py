@@ -360,6 +360,61 @@ def file_too_large(error):
     flash('Файл слишком большой. Максимум 15 МБ.', 'warning')
     return redirect(url_for('admin_dashboard') if is_admin() else url_for('index'))
 
+@app.cli.command('production-check')
+def production_check():
+    """Read-only deployment readiness check; never prints secrets."""
+    from sqlalchemy import text as sql_text
+    errors = []
+    warnings = []
+    with app.app_context():
+        if app.config.get('APP_ENV') != 'production':
+            errors.append('APP_ENV must equal production')
+        if not app.config.get('SESSION_COOKIE_SECURE'):
+            errors.append('SESSION_COOKIE_SECURE is not enabled')
+        if not app.config.get('PUBLIC_BASE_URL', '').startswith('https://'):
+            errors.append('PUBLIC_BASE_URL must use HTTPS')
+        if not app.config.get('REQUIRE_ADMIN_MFA'):
+            errors.append('Admin MFA is not mandatory')
+        if not app.config.get('UPLOAD_ANTIVIRUS_REQUIRED'):
+            errors.append('Antivirus scanning is not mandatory')
+        if not app.config.get('MFA_ENCRYPTION_KEY'):
+            errors.append('MFA_ENCRYPTION_KEY missing')
+        try:
+            db.session.execute(sql_text('SELECT 1'))
+        except Exception:
+            errors.append('Database connection failed')
+            db.session.rollback()
+        try:
+            account = db.session.get(AdminAccount, 1)
+            if not account:
+                errors.append('Admin login missing')
+            elif not db.session.get(AdminSecondFactor, account.id):
+                errors.append('Admin TOTP enrollment missing')
+        except Exception:
+            errors.append('Cannot query administrator MFA state')
+            db.session.rollback()
+        if app.config.get('UPLOAD_ANTIVIRUS_REQUIRED'):
+            try:
+                clean, _ = scan_upload_with_clamd(
+                    b'GreenCodeAcademy scanner health check',
+                    app.config.get('CLAMAV_SOCKET'))
+                if not clean:
+                    errors.append('ClamAV healthcheck not clean')
+            except Exception:
+                errors.append('ClamAV unavailable (check daemon/socket permissions)')
+        if not smtp_ready():
+            warnings.append('SMTP is not configured: password recovery cannot deliver emails')
+        if not app.config.get('REQUIRE_EMAIL_VERIFICATION'):
+            warnings.append('Email verification is disabled for new users')
+    for item in errors:
+        click.echo('ERROR: ' + item)
+    for item in warnings:
+        click.echo('WARNING: ' + item)
+    if errors:
+        raise click.ClickException('Production readiness FAILED')
+    click.echo('Production readiness PASSED (does not validate public TLS, SMTP delivery or restore)')
+    
+
 # ----------------- AUTH, EMAIL & SECURITY HELPERS -----------------
 RATE_WINDOW = timedelta(minutes=15)
 RATE_LIMIT = 5
