@@ -160,14 +160,17 @@ def test_admin_upload_accepts_only_clean_scanned_content(client):
 
 
 def test_smtp_message_is_captured_without_external_delivery(client):
+    """Mock the transport itself: no DNS lookup or SMTP socket is ever opened."""
     old = {key: app.config.get(key) for key in [
-        'MAIL_SUPPRESS_SEND', 'MAIL_USERNAME', 'MAIL_PASSWORD',
+        'MAIL_USERNAME', 'MAIL_PASSWORD',
         'MAIL_DEFAULT_SENDER', 'CONTACT_RECIPIENT']}
-    app.config.update(MAIL_SUPPRESS_SEND=True, MAIL_USERNAME='noreply@example.test',
-                      MAIL_PASSWORD='local-only', MAIL_DEFAULT_SENDER='noreply@example.test',
+    app.config.update(MAIL_USERNAME='noreply@example.test',
+                      MAIL_PASSWORD='fake-value-for-test',
+                      MAIL_DEFAULT_SENDER='noreply@example.test',
                       CONTACT_RECIPIENT='support@example.test')
+    outbox = []
     try:
-        with mail.record_messages() as outbox:
+        with patch.object(mail, 'send', side_effect=lambda message: outbox.append(message)):
             result = client.post('/contact', data={
                 'csrf_token': csrf(client, '/contact'),
                 'name': 'Student', 'email': 'student@example.test',
