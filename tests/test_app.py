@@ -26,7 +26,8 @@ def isolated_db():
         db.session.remove()
         db.drop_all()
         db.create_all()
-        yield
+    yield
+    with app.app_context():
         db.session.remove()
         db.drop_all()
 
