@@ -1244,7 +1244,19 @@ def import_materials(directory, apply):
                             continue
                 if path.suffix.lower() in ('.txt', '.md'):
                     data.decode('utf-8')
+                if app.config.get('UPLOAD_ANTIVIRUS_REQUIRED'):
+                    clean, verdict = scan_upload_with_clamd(
+                        data, app.config.get('CLAMAV_SOCKET'))
+                    if not clean:
+                        app.logger.warning('Importer rejected unclean file: %s', verdict[:120])
+                        skipped += 1
+                        continue
             except (OSError, UnicodeError, ValueError, zipfile.BadZipFile):
+                skipped += 1
+                continue
+            except Exception:
+                # Production must never import unscanned course files.
+                app.logger.exception('Importer scanner unavailable, skipping file')
                 skipped += 1
                 continue
 
