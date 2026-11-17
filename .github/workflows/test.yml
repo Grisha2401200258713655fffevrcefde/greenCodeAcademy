@@ -1,0 +1,81 @@
+name: academy-checks
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [feat/academy-modernization-2026-11]
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile sources
+        run: python -m compileall -q app.py config.py tests scripts
+      - name: Run integration tests
+        env:
+          SECRET_KEY: "unit-test-secret-key-unique-and-long-enough-123456789"
+          DATABASE_URL: "sqlite:///:memory:"
+          SESSION_COOKIE_SECURE: "false"
+          REQUIRE_EMAIL_VERIFICATION: "false"
+          PUBLIC_BASE_URL: "http://localhost:5000"
+        run: python -m pytest -q --disable-warnings
+
+  postgres-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: academy_test
+          POSTGRES_PASSWORD: ci_test_password_only
+          POSTGRES_DB: academy_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U academy_test -d academy_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Test real PostgreSQL schema, foreign keys and login hashing
+        env:
+          SECRET_KEY: "unit-test-secret-key-unique-and-long-enough-123456789"
+          DATABASE_URL: "postgresql+psycopg://academy_test:ci_test_password_only@localhost:5432/academy_ci"
+          TEST_POSTGRES_URL: "postgresql+psycopg://academy_test:ci_test_password_only@localhost:5432/academy_ci"
+          PUBLIC_BASE_URL: "http://localhost:5000"
+        run: python -m pytest -q tests/test_postgres.py
+
+      - name: Verify actual PostgreSQL dump and restore in a separate CI database
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "5432"
+          PGUSER: academy_test
+          PGPASSWORD: ci_test_password_only
+          PGDATABASE: academy_ci
+        run: |
+          set -euo pipefail
+          container="${{ job.services.postgres.id }}"
+          docker exec "$container" pg_dump -U academy_test -d academy_ci -Fc -f /tmp/academy-ci.dump
+          docker exec "$container" pg_restore --list /tmp/academy-ci.dump >/dev/null
+          docker exec "$container" createdb -U academy_test academy_ci_restore
+          docker exec "$container" pg_restore -U academy_test -d academy_ci_restore --no-owner --no-privileges --exit-on-error /tmp/academy-ci.dump
+          count=$(docker exec "$container" psql -U academy_test -d academy_ci_restore -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';")
+          echo "Restored application tables: $count"
+          test "$count" -ge 8
+

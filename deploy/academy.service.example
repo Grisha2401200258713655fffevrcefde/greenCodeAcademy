@@ -1,0 +1,22 @@
+[Unit]
+Description=GreenCodeAcademy Gunicorn
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=academy
+Group=academy
+WorkingDirectory=/opt/greenCodeAcademy
+EnvironmentFile=/etc/greencodeacademy.env
+ExecStart=/opt/greenCodeAcademy/.venv/bin/gunicorn --workers 2 --bind 127.0.0.1:8000 --access-logfile - app:app
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

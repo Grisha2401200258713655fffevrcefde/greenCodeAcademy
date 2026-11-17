@@ -14,7 +14,7 @@
         {% for m in materials %}
             <li class="list-group-item bg-dark text-light">
                 <a href="{{ url_for('material_detail', material_id=m.id) }}" class="text-warning fw-bold">
-                    {{ m.title|safe }}
+                    {{ m.title }}
                 </a>
                 <small class="d-block text-muted">
                     {{ m.type|capitalize }} • {{ m.language }} • {{ m.created_at.strftime('%d.%m.%Y') }}
@@ -25,7 +25,7 @@
         {% endfor %}
     </ul>
 
-    {% if pagination.pages > 1 %}
+    {% if pagination and pagination.pages > 1 %}
     <nav class="mt-4">
         <ul class="pagination justify-content-center">
             {% if pagination.has_prev %}

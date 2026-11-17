@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% block title %}Журнал действий администратора{% endblock %}{% block content %}
+<div class="d-flex align-items-center justify-content-between gap-2 mb-4 flex-wrap">
+  <div><h1 class="h3">Журнал действий</h1><p class="text-secondary">Последние 100 событий безопасности и управления материалами.</p></div>
+  <a class="btn btn-outline-warning" href="{{ url_for('admin_dashboard') }}">Вернуться к материалам</a>
+</div>
+<div class="table-responsive"><table class="table table-dark table-striped">
+<thead><tr><th>Дата (UTC)</th><th>Действие</th><th>Объект</th><th>Источник (хеш)</th></tr></thead>
+<tbody>{% for e in events %}<tr>
+<td>{{ e.at.strftime('%d.%m.%Y %H:%M') }}</td><td>{{ e.action }}</td>
+<td>{{ e.subject }}</td><td><code>{{ e.ip_hash[:12] }}</code></td></tr>
+{% else %}<tr><td colspan="4">Событий пока нет</td></tr>{% endfor %}
+</tbody></table></div>{% endblock %}

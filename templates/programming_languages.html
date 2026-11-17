@@ -9,7 +9,7 @@
         {% for lang, count in by_lang %}
             <div class="col-md-3 text-center mb-4 language-card">
                 <a href="{{ url_for('materials_by_language', language=lang) }}" class="text-decoration-none d-block p-3">
-                    <img src="{{ url_for('static', filename='images/' ~ lang ~ '.png') }}"
+                    <img src="{{ url_for('static', filename='images/' ~ ({'python':'python','js':'JS','javascript':'JS','css':'CSS','cpp':'C++','java':'Java','go':'Go','rust':'Rust','node.js':'Node.js'}.get(lang|lower, lang)) ~ '.png') }}"
                          alt="{{ lang }}"
                          class="img-fluid rounded mb-2"
                          style="max-height:120px;">

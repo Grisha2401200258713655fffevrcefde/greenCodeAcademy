@@ -12,5 +12,14 @@
     <a class="btn btn-outline-info" href="{{ url_for('material_view', material_id=material.id) }}">Открыть</a>
     <a class="btn btn-outline-success" href="{{ url_for('download_material', material_id=material.id) }}">Скачать</a>
   </div>
+  {% if material.type == 'practice' %}
+    {% if student_logged_in() %}
+      <form method="post" action="{{ url_for('complete_material', material_id=material.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn {{ 'btn-outline-secondary' if done else 'btn-success' }}" type="submit">{{ 'Снять отметку выполнения' if done else 'Отметить как выполнено' }}</button>
+      </form>
+      <p class="small text-secondary mt-2">Отметка выставляется самостоятельно; решение автоматически не проверяется.</p>
+    {% else %}<p class="text-secondary">Войдите, чтобы сохранять прогресс обучения.</p>{% endif %}
+  {% endif %}
 </div>
 {% endblock %}
